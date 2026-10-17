@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1060572107122",
+    "project_id": "movie-watchlist-49fbd",
+    "storage_bucket": "movie-watchlist-49fbd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1060572107122:android:0ecd12555e229795a08deb",
+        "android_client_info": {
+          "package_name": "com.example.movie_watchlist"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDyMIHElLaylMKMJ3ZyrX6L3kJfehLp07A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
