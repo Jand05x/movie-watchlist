@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/tmdb_service.dart';
 import '../services/watchlist_service.dart';
+import '../widgets/poster_image.dart';
 import 'movie_details_screen.dart';
 
 class WatchlistScreen extends StatelessWidget {
@@ -149,20 +150,12 @@ class WatchlistScreen extends StatelessWidget {
                           padding: const EdgeInsets.all(10),
                           child: Row(
                             children: [
-                              SizedBox(
+                              PosterImage(
+                                path: poster,
                                 width: 64,
                                 height: 96,
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(6),
-                                  child: poster.isNotEmpty
-                                      ? Image.network(
-                                          'https://image.tmdb.org/t/p/w342$poster',
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (_, _, _) =>
-                                              _posterPlaceholder(),
-                                        )
-                                      : _posterPlaceholder(),
-                                ),
+                                radius: 6,
+                                heroTag: 'poster-${movie['media_type'] ?? 'movie'}-$id',
                               ),
                               const SizedBox(width: 14),
                               Expanded(
@@ -263,11 +256,4 @@ class WatchlistScreen extends StatelessWidget {
     }
   }
 
-  Widget _posterPlaceholder() {
-    return Container(
-      color: _cardBackground,
-      alignment: Alignment.center,
-      child: const Icon(Icons.movie_outlined, color: Colors.white38, size: 30),
-    );
-  }
 }

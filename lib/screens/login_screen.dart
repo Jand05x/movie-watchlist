@@ -13,6 +13,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
 
   bool _isLogin = true;
   bool _loading = false;
@@ -29,7 +30,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final error = _isLogin
           ? await auth.signIn(_emailCtrl.text.trim(), _passCtrl.text)
-          : await auth.signUp(_emailCtrl.text.trim(), _passCtrl.text);
+          : await auth.signUp(
+              _emailCtrl.text.trim(),
+              _passCtrl.text,
+              _usernameCtrl.text.trim(),
+            );
 
       if (!mounted) return;
 
@@ -51,6 +56,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _emailCtrl.dispose();
     _passCtrl.dispose();
+    _usernameCtrl.dispose();
     super.dispose();
   }
 
@@ -86,6 +92,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: const TextStyle(color: Colors.white),
                   decoration: _inputDecoration('Email'),
                 ),
+                if (!_isLogin) ...[
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _usernameCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: _inputDecoration('Username'),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 TextField(
                   controller: _passCtrl,

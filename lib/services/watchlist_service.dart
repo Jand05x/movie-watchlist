@@ -29,8 +29,29 @@ class WatchlistService {
       'title': movie['title'] ?? 'Untitled',
       'poster_path': movie['poster_path'] ?? '',
       'media_type': movie['media_type'] ?? 'movie',
+      'visibility': 'public',
+      'watched': false,
       'added_at': FieldValue.serverTimestamp(),
     });
+  }
+
+  static Future<void> setReviewFlags(
+    int tmdbId, {
+    required bool watched,
+    required String visibility,
+    int? rating,
+  }) async {
+    final data = <String, dynamic>{
+      'watched': watched,
+      'visibility': visibility,
+    };
+    if (rating != null) data['rating'] = rating;
+
+    final document = _col.doc(tmdbId.toString());
+    final snapshot = await document.get();
+    if (!snapshot.exists) return;
+
+    await document.set(data, SetOptions(merge: true));
   }
 
   static Future<void> remove(int tmdbId) async {

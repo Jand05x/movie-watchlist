@@ -5,7 +5,6 @@ import '../services/tmdb_service.dart';
 import '../services/auth_service.dart';
 import 'search_results_screen.dart';
 import 'movie_details_screen.dart';
-import 'watchlist_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -180,27 +179,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: const Color(0xFF1F1F1F),
-        selectedItemColor: const Color(0xFFE50914),
-        unselectedItemColor: Colors.white60,
-        currentIndex: 0,
-        onTap: (index) {
-          if (index == 1) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => WatchlistScreen()),
-            );
-          }
-        },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.bookmark),
-            label: 'My Watchlist',
-          ),
-        ],
       ),
     );
   }

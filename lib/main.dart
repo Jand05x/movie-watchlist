@@ -6,7 +6,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
-import 'screens/home_screen.dart';
+import 'screens/main_screen.dart';
 import 'services/auth_service.dart';
 
 Future<void> main() async {
@@ -47,7 +47,7 @@ class MyApp extends StatelessWidget {
             }
 
             if (snapshot.hasData) {
-              return HomeScreen();
+              return const MainScreen();
             }
 
             return LoginScreen();

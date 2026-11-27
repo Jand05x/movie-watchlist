@@ -1,0 +1,100 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function pairId(first, second) {
+      return first < second ? first + '_' + second : second + '_' + first;
+    }
+
+    function acceptedFriend(otherUid) {
+      let pairPath = /databases/$(database)/documents/friendships/$(pairId(uid(), otherUid));
+      return exists(pairPath) && get(pairPath).data.status == 'accepted';
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && userId == uid()
+                    && request.resource.data.uid == uid();
+      allow update: if signedIn() && userId == uid();
+      allow delete: if false;
+
+      match /watchlist/{movieId} {
+        allow read: if signedIn() && userId == uid();
+        allow create, update: if signedIn()
+          && userId == uid()
+          && (!('visibility' in request.resource.data)
+              || request.resource.data.visibility in ['public', 'private']);
+        allow delete: if signedIn() && userId == uid();
+      }
+
+      match /reviews/{movieId} {
+        allow read: if signedIn() && userId == uid();
+        allow create, update: if signedIn()
+          && userId == uid()
+          && (!('visibility' in request.resource.data)
+              || request.resource.data.visibility in ['public', 'private']);
+        allow delete: if signedIn() && userId == uid();
+      }
+    }
+
+    match /usernames/{username} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && request.resource.data.uid == uid();
+      allow delete: if signedIn() && resource.data.uid == uid();
+      allow update: if false;
+    }
+
+    match /friendships/{pair} {
+      allow read: if signedIn() && uid() in resource.data.participants;
+
+      allow create: if signedIn()
+        && request.resource.data.userId == uid()
+        && request.resource.data.friendId != uid()
+        && request.resource.data.status == 'pending'
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() == 2
+        && uid() in request.resource.data.participants
+        && request.resource.data.friendId in request.resource.data.participants
+        && pair == pairId(request.resource.data.userId, request.resource.data.friendId)
+        && !exists(/databases/$(database)/documents/friendships/$(pair));
+
+      allow update: if signedIn()
+        && resource.data.status == 'pending'
+        && resource.data.userId == request.resource.data.userId
+        && resource.data.friendId == request.resource.data.friendId
+        && request.resource.data.status == 'accepted'
+        && uid() == resource.data.friendId;
+
+      allow delete: if signedIn() && uid() in resource.data.participants;
+    }
+
+    match /activity/{activityId} {
+      allow read: if signedIn()
+        && (resource.data.userId == uid()
+            || (resource.data.visibility == 'public'
+                && acceptedFriend(resource.data.userId)));
+
+      allow create: if signedIn()
+        && request.resource.data.userId == uid()
+        && request.resource.data.type in ['rated', 'watched']
+        && request.resource.data.visibility in ['public', 'private'];
+
+      allow update: if signedIn()
+        && resource.data.userId == uid()
+        && request.resource.data.userId == uid()
+        && request.resource.data.visibility in ['public', 'private'];
+
+      allow delete: if signedIn() && resource.data.userId == uid();
+    }
+  }
+}

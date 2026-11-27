@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/tmdb_service.dart';
+import '../widgets/poster_image.dart';
 import 'movie_details_screen.dart';
 
 class SearchResultsScreen extends StatefulWidget {
@@ -46,17 +47,16 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
             itemCount: movies.length,
             itemBuilder: (context, index) {
               final movie = movies[index];
-              final posterPath = movie['poster_path'];
+              final rawId = movie['id'];
+              final id = rawId is num ? rawId.toInt() : null;
 
               return ListTile(
-                leading: posterPath != null && posterPath != ''
-                    ? Image.network(
-                        '${TmdbService.imageBase}$posterPath',
-                        width: 55,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Icon(Icons.movie),
-                      )
-                    : const SizedBox(width: 55, child: Icon(Icons.movie)),
+                leading: PosterImage(
+                  path: movie['poster_path'] as String?,
+                  width: 48,
+                  height: 72,
+                  heroTag: id == null ? null : 'poster-movie-$id',
+                ),
                 title: Text(movie['title'] ?? 'Untitled'),
                 subtitle: Text((movie['release_date'] ?? '').toString()),
                 onTap: () {

@@ -8,14 +8,19 @@ class TmdbService {
 
   static const String _base = 'https://api.themoviedb.org/3';
   static const String imageBase = 'https://image.tmdb.org/t/p/w500';
+  static const String backdropBase = 'https://image.tmdb.org/t/p/w1280';
 
-  static Future<List<Map<String, dynamic>>> _getResults(String endpoint) async {
+  static Future<List<Map<String, dynamic>>> _getResults(
+    String endpoint, {
+    Map<String, String> queryParameters = const {},
+  }) async {
     if (_apiKey.isEmpty) {
       throw Exception('TMDB_API_KEY is missing. Check your .env file.');
     }
 
-    final uri = Uri.parse('$_base$endpoint')
-        .replace(queryParameters: {'api_key': _apiKey});
+    final uri = Uri.parse('$_base$endpoint').replace(
+      queryParameters: {'api_key': _apiKey, ...queryParameters},
+    );
 
     final response = await http.get(uri);
 
@@ -57,10 +62,11 @@ class TmdbService {
     }).toList();
   }
 
-  // Existing movie search
-  static Future<List<Map<String, dynamic>>> searchMovies(String query) async {
-    final encodedQuery = Uri.encodeQueryComponent(query);
-    return _getResults('/search/movie?query=$encodedQuery');
+  static Future<List<Map<String, dynamic>>> searchMovies(String query) {
+    return _getResults(
+      '/search/movie',
+      queryParameters: {'query': query},
+    );
   }
 
   // Movie details, including cast and crew
