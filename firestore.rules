@@ -14,9 +14,52 @@ service cloud.firestore {
       return first < second ? first + '_' + second : second + '_' + first;
     }
 
+    function friendshipPath(first, second) {
+      return /databases/$(database)/documents/friendships/$(pairId(first, second));
+    }
+
     function acceptedFriend(otherUid) {
-      let pairPath = /databases/$(database)/documents/friendships/$(pairId(uid(), otherUid));
+      let pairPath = friendshipPath(uid(), otherUid);
       return exists(pairPath) && get(pairPath).data.status == 'accepted';
+    }
+
+    function friendshipParticipant(data) {
+      return (('participants' in data) && uid() in data.participants)
+          || (('userId' in data) && data.userId == uid())
+          || (('friendId' in data) && data.friendId == uid());
+    }
+
+    function canReopenFriendship(oldData, newData) {
+      return oldData.status in ['declined', 'cancelled']
+          && newData.status == 'pending'
+          && friendshipParticipant(oldData)
+          && newData.userId == uid()
+          && newData.friendId != uid()
+          && newData.participants is list
+          && newData.participants.size() == 2
+          && uid() in newData.participants
+          && newData.friendId in newData.participants;
+    }
+
+    function canAnswerFriendship(oldData, newData) {
+      return oldData.status == 'pending'
+          && newData.status in ['accepted', 'declined']
+          && ('friendId' in oldData)
+          && oldData.friendId == uid()
+          && newData.responderUid == uid();
+    }
+
+    function canCancelFriendship(oldData, newData) {
+      return oldData.status == 'pending'
+          && newData.status == 'cancelled'
+          && ('userId' in oldData)
+          && oldData.userId == uid()
+          && newData.responderUid == uid();
+    }
+
+    function tasteSharedBy(userId) {
+      let profile = get(/databases/$(database)/documents/users/$(userId)).data;
+      return !('tasteShared' in profile) || profile.tasteShared == true;
     }
 
     match /users/{userId} {
@@ -24,7 +67,18 @@ service cloud.firestore {
       allow create: if signedIn()
                     && userId == uid()
                     && request.resource.data.uid == uid();
-      allow update: if signedIn() && userId == uid();
+      allow update: if signedIn()
+                    && userId == uid()
+                    && (!('uid' in resource.data)
+                        || request.resource.data.uid == resource.data.uid)
+                    && (!('email' in resource.data)
+                        || request.resource.data.email == resource.data.email)
+                    && (!('username' in resource.data)
+                        || request.resource.data.username == resource.data.username)
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'displayName', 'bio', 'avatarUrl', 'discoverable',
+                      'tasteShared', 'schemaVersion', 'updatedAt'
+                    ]);
       allow delete: if false;
 
       match /watchlist/{movieId} {
@@ -32,7 +86,9 @@ service cloud.firestore {
         allow create, update: if signedIn()
           && userId == uid()
           && (!('visibility' in request.resource.data)
-              || request.resource.data.visibility in ['public', 'private']);
+              || request.resource.data.visibility in ['public', 'private'])
+          && (!('watched' in request.resource.data)
+              || request.resource.data.watched is bool);
         allow delete: if signedIn() && userId == uid();
       }
 
@@ -41,7 +97,9 @@ service cloud.firestore {
         allow create, update: if signedIn()
           && userId == uid()
           && (!('visibility' in request.resource.data)
-              || request.resource.data.visibility in ['public', 'private']);
+              || request.resource.data.visibility in ['public', 'private'])
+          && (!('watched' in request.resource.data)
+              || request.resource.data.watched is bool);
         allow delete: if signedIn() && userId == uid();
       }
 
@@ -50,22 +108,58 @@ service cloud.firestore {
         allow create: if signedIn()
           && (userId == uid()
               || (request.resource.data.senderUid == uid()
-                  && acceptedFriend(userId)));
+                  && request.resource.data.recipientUid == userId
+                  && existsAfter(/databases/$(database)/documents/shares/$(shareId))
+                  && getAfter(/databases/$(database)/documents/shares/$(shareId)).data.senderUid == uid()
+                  && getAfter(/databases/$(database)/documents/shares/$(shareId)).data.recipientUid == userId));
         allow update: if signedIn()
-          && (userId == uid()
-              || (resource.data.senderUid == uid() && userId != uid()));
+          && userId == uid()
+          && resource.data.senderUid == request.resource.data.senderUid
+          && resource.data.recipientUid == request.resource.data.recipientUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'reactions', 'read', 'respondedAt'
+          ]);
         allow delete: if signedIn() && userId == uid();
       }
 
       match /notifications/{notificationId} {
         allow read: if signedIn() && userId == uid();
         allow create: if signedIn()
-          && (userId == uid()
+          && ((userId == uid()
+              && request.resource.data.actorUid != uid())
               || (request.resource.data.actorUid == uid()
-                  && acceptedFriend(userId)));
+                  && userId != uid()
+                  && request.resource.data.type in ['shared_movie', 'watch_invite']
+                  && acceptedFriend(userId))
+              || (request.resource.data.actorUid == uid()
+                  && userId != uid()
+                  && request.resource.data.type == 'friend_request'
+                  && request.resource.data.friendshipId == notificationId
+                  && existsAfter(/databases/$(database)/documents/friendships/$(notificationId))
+                  && getAfter(/databases/$(database)/documents/friendships/$(notificationId)).data.status == 'pending'
+                  && getAfter(/databases/$(database)/documents/friendships/$(notificationId)).data.userId == uid()
+                  && getAfter(/databases/$(database)/documents/friendships/$(notificationId)).data.friendId == userId)
+              || (request.resource.data.actorUid == uid()
+                  && userId != uid()
+                  && request.resource.data.type in ['friend_accepted', 'friend_declined']
+                  && existsAfter(/databases/$(database)/documents/friendships/$(request.resource.data.friendshipId))
+                  && getAfter(/databases/$(database)/documents/friendships/$(request.resource.data.friendshipId)).data.status in ['accepted', 'declined']
+                  && getAfter(/databases/$(database)/documents/friendships/$(request.resource.data.friendshipId)).data.responderUid == uid()
+                  && getAfter(/databases/$(database)/documents/friendships/$(request.resource.data.friendshipId)).data.userId == userId)
+              || (request.resource.data.actorUid == uid()
+                  && userId != uid()
+                  && request.resource.data.type in ['share_reply', 'watch_reply']
+                  && existsAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId))
+                  && getAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId)).data.status in ['accepted', 'declined']
+                  && getAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId)).data.recipientUid == uid()
+                  && getAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId)).data.senderUid == userId));
         allow update: if signedIn()
           && (userId == uid()
-              || (resource.data.actorUid == uid() && userId != uid()));
+              || resource.data.actorUid == uid()
+              || request.resource.data.actorUid == uid())
+          && ((!('actorUid' in resource.data)
+              || request.resource.data.actorUid == resource.data.actorUid)
+              || request.resource.data.type in ['friend_request', 'friend_accepted', 'friend_declined', 'share_reply', 'watch_reply']);
         allow delete: if false;
       }
     }
@@ -79,7 +173,9 @@ service cloud.firestore {
     }
 
     match /friendships/{pair} {
-      allow read: if signedIn() && uid() in resource.data.participants;
+      allow get: if signedIn()
+        && (resource == null || friendshipParticipant(resource.data));
+      allow list: if signedIn() && friendshipParticipant(resource.data);
 
       allow create: if signedIn()
         && request.resource.data.userId == uid()
@@ -93,21 +189,38 @@ service cloud.firestore {
         && !exists(/databases/$(database)/documents/friendships/$(pair));
 
       allow update: if signedIn()
-        && resource.data.status == 'pending'
-        && resource.data.userId == request.resource.data.userId
-        && resource.data.friendId == request.resource.data.friendId
-        && request.resource.data.status == 'accepted'
-        && uid() == resource.data.friendId;
+        && friendshipParticipant(resource.data)
+        && (
+          (canReopenFriendship(resource.data, request.resource.data)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'userId', 'friendId', 'participants', 'status', 'createdAt',
+              'updatedAt', 'responderUid', 'respondedAt'
+            ]))
+          || (canAnswerFriendship(resource.data, request.resource.data)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'updatedAt', 'responderUid', 'respondedAt'
+            ]))
+          || (canCancelFriendship(resource.data, request.resource.data)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'updatedAt', 'responderUid', 'respondedAt'
+            ]))
+        );
 
-      allow delete: if signedIn() && uid() in resource.data.participants;
+      allow delete: if signedIn() && friendshipParticipant(resource.data);
     }
 
     match /shares/{shareId} {
-      allow read: if signedIn() && uid() in resource.data.participants;
+      allow read: if signedIn()
+        && ((('participants' in resource.data) && uid() in resource.data.participants)
+            || (('senderUid' in resource.data) && resource.data.senderUid == uid())
+            || (('recipientUid' in resource.data) && resource.data.recipientUid == uid()));
 
       allow create: if signedIn()
         && request.resource.data.senderUid == uid()
         && request.resource.data.recipientUid != uid()
+        && request.resource.data.status == 'sent'
+        && request.resource.data.kind in ['movie', 'watch_together']
+        && request.resource.data.movieId is int
         && acceptedFriend(request.resource.data.recipientUid)
         && request.resource.data.participants is list
         && request.resource.data.participants.size() == 2
@@ -115,9 +228,13 @@ service cloud.firestore {
         && request.resource.data.recipientUid in request.resource.data.participants;
 
       allow update: if signedIn()
-        && uid() in resource.data.participants
-        && resource.data.senderUid == request.resource.data.senderUid
-        && resource.data.recipientUid == request.resource.data.recipientUid;
+        && resource.data.recipientUid == uid()
+        && resource.data.status == 'sent'
+        && request.resource.data.senderUid == resource.data.senderUid
+        && request.resource.data.recipientUid == resource.data.recipientUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'respondedAt', 'reactions'
+        ]);
 
       allow delete: if signedIn() && uid() in resource.data.participants;
     }
@@ -125,7 +242,7 @@ service cloud.firestore {
     match /taste/{userId} {
       allow read: if signedIn()
         && (userId == uid()
-            || get(/databases/$(database)/documents/users/$(userId)).data.tasteShared == true);
+            || (acceptedFriend(userId) && tasteSharedBy(userId)));
       allow create, update: if signedIn()
         && userId == uid()
         && request.resource.data.uid == uid();

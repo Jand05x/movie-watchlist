@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/review_service.dart';
 import '../services/watchlist_service.dart';
 import '../theme/brand.dart';
 import '../widgets/app_empty_state.dart';
@@ -21,6 +22,11 @@ class WatchlistScreen extends StatefulWidget {
 class _WatchlistScreenState extends State<WatchlistScreen> {
   String _filter = 'All';
   String _sort = 'recent';
+  int _refreshKey = 0;
+
+  void _retry() {
+    if (mounted) setState(() => _refreshKey++);
+  }
 
   void _openDiscover() {
     if (widget.onOpenDiscover != null) {
@@ -39,14 +45,19 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     final id = rawId.toInt();
 
     try {
+      final review = await ReviewService.snapshot(id);
       await WatchlistService.remove(id);
+      if (review != null) await ReviewService.remove(id);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Removed ${movie['title'] ?? 'this title'}.'),
           action: SnackBarAction(
             label: 'Undo',
-            onPressed: () => WatchlistService.restore(movie),
+            onPressed: () async {
+              await WatchlistService.restore(movie);
+              if (review != null) await ReviewService.restore(review);
+            },
           ),
         ),
       );
@@ -97,22 +108,21 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
-            child: Row(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
               children: ['All', 'To watch', 'Watched'].map((filter) {
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(filter),
-                    selected: _filter == filter,
-                    onSelected: (value) {
-                      if (value) setState(() => _filter = filter);
-                    },
-                    selectedColor: FlickerColors.primary,
-                    labelStyle: FlickerText.caption.copyWith(
-                      color: _filter == filter
-                          ? FlickerColors.cream
-                          : FlickerColors.muted,
-                    ),
+                return ChoiceChip(
+                  label: Text(filter),
+                  selected: _filter == filter,
+                  onSelected: (value) {
+                    if (value) setState(() => _filter = filter);
+                  },
+                  selectedColor: FlickerColors.primary,
+                  labelStyle: FlickerText.caption.copyWith(
+                    color: _filter == filter
+                        ? FlickerColors.cream
+                        : FlickerColors.muted,
                   ),
                 );
               }).toList(),
@@ -120,13 +130,17 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
           ),
           Expanded(
             child: StreamBuilder<List<Map<String, dynamic>>>(
+              key: ValueKey('library-$_refreshKey-$_sort'),
               stream: WatchlistService.watchlist(sort: _sort),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const AppLoading(message: 'Loading your library...');
                 }
                 if (snapshot.hasError) {
-                  return AppErrorState(message: '${snapshot.error}');
+                  return AppErrorState(
+                    message: 'Could not load your library.\n${snapshot.error}',
+                    onRetry: _retry,
+                  );
                 }
 
                 final all = snapshot.data ?? [];
@@ -137,13 +151,20 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                 }).toList();
 
                 if (movies.isEmpty) {
+                  final watchedEmpty = _filter == 'Watched' && all.isNotEmpty;
                   return AppEmptyState(
-                    icon: Icons.bookmark_add_outlined,
+                    icon: watchedEmpty
+                        ? Icons.check_circle_outline
+                        : Icons.bookmark_add_outlined,
                     title: all.isEmpty
                         ? 'Your library is empty'
+                        : watchedEmpty
+                        ? 'No watched movies yet'
                         : 'Nothing here yet',
                     message: all.isEmpty
                         ? 'Save a title to start your watchlist.'
+                        : watchedEmpty
+                        ? 'Mark a movie as watched and it will appear here.'
                         : 'Try another filter.',
                     actionLabel: all.isEmpty ? 'Discover movies' : null,
                     onAction: all.isEmpty ? _openDiscover : null,
@@ -182,6 +203,8 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                           style: FlickerText.body.copyWith(
                             fontWeight: FontWeight.w700,
                           ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text(
                           watched

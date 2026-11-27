@@ -14,10 +14,12 @@ class AuthService extends ChangeNotifier {
         email: email.trim(),
         password: password,
       );
-      await UserService.ensureProfile();
+      UserService.clearCache();
       return null;
     } on FirebaseAuthException catch (e) {
       return e.message;
+    } catch (e) {
+      return 'Could not sign in. ${e.toString()}';
     }
   }
 
@@ -37,7 +39,7 @@ class AuthService extends ChangeNotifier {
         password: password,
       );
       await UserService.createProfile(username: username);
-      await UserService.ensureProfile();
+      UserService.clearCache();
       return null;
     } on FirebaseAuthException catch (e) {
       return e.message;
@@ -47,11 +49,12 @@ class AuthService extends ChangeNotifier {
       }
       return e.message;
     } catch (e) {
-      return e.toString();
+      return 'Could not create your account. ${e.toString()}';
     }
   }
 
   Future<void> signOut() async {
     await _auth.signOut();
+    UserService.clearCache();
   }
 }

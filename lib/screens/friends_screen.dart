@@ -5,32 +5,76 @@ import '../models/friendship.dart';
 import '../models/user_profile.dart';
 import '../services/friend_service.dart';
 import '../services/user_service.dart';
+import '../theme/brand.dart';
+import '../widgets/app_empty_state.dart';
+import '../widgets/app_error_state.dart';
+import '../widgets/app_loading.dart';
+import '../widgets/initials_avatar.dart';
+import 'add_friend_screen.dart';
+import 'profile_screen.dart';
 
-class FriendsScreen extends StatelessWidget {
+class FriendsScreen extends StatefulWidget {
   final bool embedded;
 
   const FriendsScreen({super.key, this.embedded = false});
 
   @override
+  State<FriendsScreen> createState() => _FriendsScreenState();
+}
+
+class _FriendsScreenState extends State<FriendsScreen> {
+  String? _busyId;
+  int _refreshKey = 0;
+
+  void _retry() {
+    if (mounted) setState(() => _refreshKey++);
+  }
+
+  Future<void> _openAddFriend() async {
+    final added = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const AddFriendScreen()),
+    );
+    if (added == true) _retry();
+  }
+
+  Future<void> _run(
+    String friendshipId,
+    Future<void> Function() action,
+    String message,
+  ) async {
+    setState(() => _busyId = friendshipId);
+    try {
+      await action();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busyId = null);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final body = StreamBuilder<List<Friendship>>(
+      key: ValueKey('friends-$_refreshKey'),
       stream: FriendService.relationships(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(color: Color(0xFFE50914)),
-          );
+          return const AppLoading(message: 'Loading friends...');
         }
         if (snapshot.hasError) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(
-                'Could not load friends.\n${snapshot.error}',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70),
-              ),
-            ),
+          return AppErrorState(
+            message: 'Could not load friends.\n${snapshot.error}',
+            onRetry: _retry,
           );
         }
 
@@ -39,33 +83,16 @@ class FriendsScreen extends StatelessWidget {
         final incoming = items.where((item) => item.isIncoming(uid)).toList();
         final outgoing = items.where((item) => item.isOutgoing(uid)).toList();
         final friends = items.where((item) => item.isAccepted).toList();
+        final declined = items.where((item) => item.isDeclined).toList();
+        final cancelled = items.where((item) => item.isCancelled).toList();
 
         if (items.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(32),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.people_outline, size: 64, color: Color(0xFFE50914)),
-                  SizedBox(height: 20),
-                  Text(
-                    'No friends yet',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 21,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  SizedBox(height: 10),
-                  Text(
-                    'Use the + button to find someone by email or username.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white60),
-                  ),
-                ],
-              ),
-            ),
+          return AppEmptyState(
+            icon: Icons.people_outline,
+            title: 'No friends yet',
+            message: 'Find someone by email or username to start your circle.',
+            actionLabel: widget.embedded ? null : 'Add friend',
+            onAction: widget.embedded ? null : _openAddFriend,
           );
         }
 
@@ -75,11 +102,12 @@ class FriendsScreen extends StatelessWidget {
             if (incoming.isNotEmpty) ...[
               _heading('Incoming requests'),
               ...incoming.map(
-                (friendship) => _requestTile(
+                (item) => _tile(
                   context,
-                  friendship,
-                  friendship.userId,
-                  true,
+                  item,
+                  otherUid: item.userId,
+                  subtitle: 'Wants to be friends',
+                  trailing: _pendingActions(item, incoming: true),
                 ),
               ),
               const SizedBox(height: 12),
@@ -87,11 +115,12 @@ class FriendsScreen extends StatelessWidget {
             if (outgoing.isNotEmpty) ...[
               _heading('Sent requests'),
               ...outgoing.map(
-                (friendship) => _requestTile(
+                (item) => _tile(
                   context,
-                  friendship,
-                  friendship.friendId,
-                  false,
+                  item,
+                  otherUid: item.friendId,
+                  subtitle: 'Request pending',
+                  trailing: _pendingActions(item, incoming: false),
                 ),
               ),
               const SizedBox(height: 12),
@@ -99,10 +128,53 @@ class FriendsScreen extends StatelessWidget {
             if (friends.isNotEmpty) ...[
               _heading('Your friends'),
               ...friends.map(
-                (friendship) => _friendTile(
+                (item) => _tile(
                   context,
-                  friendship,
-                  friendship.otherUser(uid),
+                  item,
+                  otherUid: item.otherUser(uid),
+                  subtitle: 'Shares public activity with you',
+                  trailing: IconButton(
+                    tooltip: 'Remove friend',
+                    icon: const Icon(
+                      Icons.person_remove_outlined,
+                      color: FlickerColors.danger,
+                    ),
+                    onPressed: _busyId == item.id
+                        ? null
+                        : () => _run(
+                              item.id,
+                              () => FriendService.remove(item.id),
+                              'Friend removed.',
+                            ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (declined.isNotEmpty) ...[
+              _heading('Declined'),
+              ...declined.map(
+                (item) => _tile(
+                  context,
+                  item,
+                  otherUid: item.otherUser(uid),
+                  subtitle: item.wasDeclinedBy(uid)
+                      ? 'You declined this request'
+                      : 'They declined this request',
+                  trailing: _endedActions(item),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (cancelled.isNotEmpty) ...[
+              _heading('Cancelled'),
+              ...cancelled.map(
+                (item) => _tile(
+                  context,
+                  item,
+                  otherUid: item.otherUser(uid),
+                  subtitle: 'Request cancelled',
+                  trailing: _endedActions(item),
                 ),
               ),
             ],
@@ -111,13 +183,19 @@ class FriendsScreen extends StatelessWidget {
       },
     );
 
-    if (embedded) return body;
+    if (widget.embedded) return body;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF141414),
+      backgroundColor: FlickerColors.canvas,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF141414),
         title: const Text('Friends'),
+        actions: [
+          IconButton(
+            tooltip: 'Add friend',
+            icon: const Icon(Icons.person_add_alt_1),
+            onPressed: _openAddFriend,
+          ),
+        ],
       ),
       body: body,
     );
@@ -127,121 +205,124 @@ class FriendsScreen extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
       child: Text(
-        text,
-        style: const TextStyle(
-          color: Color(0xFFE50914),
-          fontSize: 13,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.6,
-        ),
+        text.toUpperCase(),
+        style: FlickerText.label.copyWith(color: FlickerColors.primaryBright),
       ),
     );
   }
 
-  Widget _requestTile(
-    BuildContext context,
-    Friendship friendship,
-    String otherUid,
-    bool incoming,
-  ) {
-    return Card(
-      color: const Color(0xFF252525),
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: const CircleAvatar(
-          backgroundColor: Color(0xFF3A3A3A),
-          child: Icon(Icons.person, color: Colors.white70),
-        ),
-        title: _UserName(uid: otherUid),
-        subtitle: Text(
-          incoming ? 'Wants to be friends' : 'Request pending',
-          style: const TextStyle(color: Colors.white60, fontSize: 12),
-        ),
-        trailing: incoming
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: 'Accept',
-                    icon: const Icon(Icons.check, color: Colors.greenAccent),
-                    onPressed: () => _run(
-                      context,
-                      () => FriendService.accept(friendship.id),
+  Widget _pendingActions(Friendship item, {required bool incoming}) {
+    final busy = _busyId == item.id;
+    if (incoming) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: 'Accept',
+            icon: const Icon(Icons.check, color: Colors.greenAccent),
+            onPressed: busy
+                ? null
+                : () => _run(
+                      item.id,
+                      () => FriendService.accept(item.id),
                       'Friend request accepted.',
                     ),
-                  ),
-                  IconButton(
-                    tooltip: 'Decline',
-                    icon: const Icon(Icons.close, color: Colors.redAccent),
-                    onPressed: () => _run(
-                      context,
-                      () => FriendService.remove(friendship.id),
-                      'Request declined.',
+          ),
+          IconButton(
+            tooltip: 'Decline',
+            icon: const Icon(Icons.close, color: FlickerColors.danger),
+            onPressed: busy
+                ? null
+                : () => _run(
+                      item.id,
+                      () => FriendService.decline(item.id),
+                      'Friend request declined.',
                     ),
-                  ),
-                ],
-              )
-            : IconButton(
-                tooltip: 'Cancel request',
-                icon: const Icon(Icons.cancel_outlined, color: Colors.white70),
-                onPressed: () => _run(
-                  context,
-                  () => FriendService.remove(friendship.id),
-                  'Request cancelled.',
-                ),
+          ),
+        ],
+      );
+    }
+
+    return IconButton(
+      tooltip: 'Cancel request',
+      icon: const Icon(Icons.cancel_outlined, color: FlickerColors.muted),
+      onPressed: busy
+          ? null
+          : () => _run(
+                item.id,
+                () => FriendService.cancel(item.id),
+                'Friend request cancelled.',
               ),
+    );
+  }
+
+  Widget? _endedActions(Friendship item) {
+    if (_busyId == item.id) {
+      return const SizedBox(
+        height: 18,
+        width: 18,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+    return IconButton(
+      tooltip: 'Remove record',
+      icon: const Icon(Icons.delete_outline, color: FlickerColors.muted),
+      onPressed: () => _run(
+        item.id,
+        () => FriendService.remove(item.id),
+        'Request removed.',
       ),
     );
   }
 
-  Widget _friendTile(
+  Widget _tile(
     BuildContext context,
-    Friendship friendship,
-    String otherUid,
-  ) {
+    Friendship item, {
+    required String otherUid,
+    required String subtitle,
+    Widget? trailing,
+  }) {
     return Card(
-      color: const Color(0xFF252525),
+      color: FlickerColors.surface,
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
-        leading: const CircleAvatar(
-          backgroundColor: Color(0xFF3A3A3A),
-          child: Icon(Icons.person, color: Colors.white70),
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        leading: _Avatar(uid: otherUid),
         title: _UserName(uid: otherUid),
-        subtitle: const Text(
-          'Shares public activity with you',
-          style: TextStyle(color: Colors.white60, fontSize: 12),
-        ),
-        trailing: IconButton(
-          tooltip: 'Remove friend',
-          icon: const Icon(Icons.person_remove_outlined, color: Color(0xFFE50914)),
-          onPressed: () => _run(
-            context,
-            () => FriendService.remove(friendship.id),
-            'Friend removed.',
-          ),
-        ),
+        subtitle: Text(subtitle, style: FlickerText.caption),
+        trailing: trailing,
+        onTap: otherUid.isEmpty
+            ? null
+            : () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ProfileScreen(friendUid: otherUid),
+                  ),
+                );
+              },
       ),
     );
   }
+}
 
-  Future<void> _run(
-    BuildContext context,
-    Future<void> Function() action,
-    String message,
-  ) async {
-    try {
-      await action();
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not update: $e')));
-    }
+class _Avatar extends StatelessWidget {
+  final String uid;
+
+  const _Avatar({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<UserProfile?>(
+      future: UserService.profile(uid),
+      builder: (context, snapshot) {
+        return InitialsAvatar(
+          name: snapshot.data?.label ?? uid,
+          imageUrl: snapshot.data?.avatarUrl,
+          radius: 20,
+        );
+      },
+    );
   }
 }
 
@@ -258,10 +339,9 @@ class _UserName extends StatelessWidget {
         final fallback = uid.length > 6 ? uid.substring(0, 6) : uid;
         return Text(
           snapshot.data?.label ?? 'User $fallback',
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-          ),
+          style: FlickerText.body.copyWith(fontWeight: FontWeight.w700),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         );
       },
     );

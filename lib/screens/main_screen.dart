@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../services/user_service.dart';
+import '../services/repair_service.dart';
 import '../theme/brand.dart';
+import '../widgets/app_error_state.dart';
+import '../widgets/app_loading.dart';
 import 'discover_screen.dart';
 import 'home_screen.dart';
 import 'profile_screen.dart';
@@ -17,6 +19,8 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _index = 0;
+  bool _repairing = true;
+  String? _repairError;
 
   late final List<Widget> _pages = [
     const HomeScreen(),
@@ -29,11 +33,41 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
-    UserService.ensureProfile().catchError((_) => null);
+    _runRepair();
+  }
+
+  Future<void> _runRepair() async {
+    setState(() {
+      _repairing = true;
+      _repairError = null;
+    });
+    try {
+      await RepairService.run();
+      if (mounted) setState(() => _repairing = false);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _repairError = error.toString();
+          _repairing = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_repairError != null) {
+      return Scaffold(
+        body: AppErrorState(
+          message: 'Could not prepare your account.\n$_repairError',
+          onRetry: _runRepair,
+        ),
+      );
+    }
+    if (_repairing) {
+      return const Scaffold(body: AppLoading(message: 'Preparing your account...'));
+    }
+
     return Scaffold(
       body: IndexedStack(index: _index, children: _pages),
       bottomNavigationBar: BottomNavigationBar(

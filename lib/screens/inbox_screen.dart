@@ -9,6 +9,8 @@ import '../widgets/app_empty_state.dart';
 import '../widgets/app_error_state.dart';
 import '../widgets/app_loading.dart';
 import '../widgets/initials_avatar.dart';
+import '../widgets/poster_image.dart';
+import 'movie_details_screen.dart';
 
 class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key});
@@ -17,31 +19,53 @@ class InboxScreen extends StatefulWidget {
   State<InboxScreen> createState() => _InboxScreenState();
 }
 
-class _InboxScreenState extends State<InboxScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
+class _InboxScreenState extends State<InboxScreen> {
+  int _tab = 0;
+  int _refreshKey = 0;
+  String? _busyId;
+
+  void _retry() {
+    if (mounted) setState(() => _refreshKey++);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        TabBar(
-          controller: _tabs,
-          indicatorColor: FlickerColors.primaryBright,
-          labelColor: FlickerColors.cream,
-          unselectedLabelColor: FlickerColors.muted,
-          tabs: const [
-            Tab(text: 'Received'),
-            Tab(text: 'Sent'),
-          ],
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: ChoiceChip(
+                  label: const Text('Received'),
+                  selected: _tab == 0,
+                  onSelected: (_) => setState(() => _tab = 0),
+                  selectedColor: FlickerColors.primary,
+                  labelStyle: FlickerText.caption.copyWith(
+                    color: _tab == 0 ? FlickerColors.cream : FlickerColors.muted,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ChoiceChip(
+                  label: const Text('Sent'),
+                  selected: _tab == 1,
+                  onSelected: (_) => setState(() => _tab = 1),
+                  selectedColor: FlickerColors.primary,
+                  labelStyle: FlickerText.caption.copyWith(
+                    color: _tab == 1 ? FlickerColors.cream : FlickerColors.muted,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         Expanded(
-          child: TabBarView(
-            controller: _tabs,
-            children: [
-              _list(ActivityService.inbox(), received: true),
-              _list(ActivityService.sent(), received: false),
-            ],
+          child: _list(
+            _tab == 0 ? ActivityService.inbox() : ActivityService.sent(),
+            received: _tab == 0,
           ),
         ),
       ],
@@ -50,13 +74,17 @@ class _InboxScreenState extends State<InboxScreen>
 
   Widget _list(Stream<List<ActivityEntry>> stream, {required bool received}) {
     return StreamBuilder<List<ActivityEntry>>(
+      key: ValueKey('inbox-$_tab-$_refreshKey'),
       stream: stream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const AppLoading();
+          return const AppLoading(message: 'Loading messages...');
         }
         if (snapshot.hasError) {
-          return AppErrorState(message: '${snapshot.error}');
+          return AppErrorState(
+            message: 'Could not load messages.\n${snapshot.error}',
+            onRetry: _retry,
+          );
         }
 
         final entries = snapshot.data ?? [];
@@ -84,6 +112,8 @@ class _InboxScreenState extends State<InboxScreen>
   Widget _card(BuildContext context, ActivityEntry entry, bool received) {
     final uid = received ? entry.senderUid : entry.recipientUid;
     final note = entry.note.isEmpty ? null : '“${entry.note}”';
+    final status = _statusLabel(entry.status);
+    final busy = _busyId == entry.id;
 
     return Card(
       color: FlickerColors.surface,
@@ -115,48 +145,99 @@ class _InboxScreenState extends State<InboxScreen>
                             ? '${snapshot.data?.label ?? 'A friend'} sent this'
                             : 'Sent to ${snapshot.data?.label ?? 'a friend'}',
                         style: FlickerText.caption,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       );
                     },
                   ),
                 ),
+                Chip(
+                  label: Text(status),
+                  backgroundColor: FlickerColors.canvas,
+                  labelStyle: FlickerText.label,
+                  visualDensity: VisualDensity.compact,
+                ),
               ],
             ),
             const SizedBox(height: 10),
-            Text(entry.title, style: FlickerText.title),
+            InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: entry.movieId == 0 ? null : () => _openMovie(context, entry),
+              child: Row(
+                children: [
+                  PosterImage(
+                    path: entry.posterPath,
+                    width: 48,
+                    height: 70,
+                    radius: 7,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          entry.title,
+                          style: FlickerText.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text('Tap to view', style: FlickerText.caption),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
             if (entry.isInvite) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
               Text('Watch-night invite', style: FlickerText.caption),
             ],
             if (note != null) ...[
               const SizedBox(height: 8),
-              Text(note, style: FlickerText.body),
+              Text(
+                note,
+                style: FlickerText.body,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
-            if (!received) ...[
+            if (entry.status == 'declined') ...[
               const SizedBox(height: 8),
-              Text('Status: ${_status(entry)}', style: FlickerText.caption),
+              Text(
+                received ? 'You passed on this.' : 'They passed on this.',
+                style: FlickerText.caption,
+              ),
             ],
-            if (received) ...[
+            if (received && entry.status == 'sent') ...[
               const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
                 children: [
                   OutlinedButton(
                     style: OutlinedButton.styleFrom(
                       foregroundColor: FlickerColors.muted,
                       side: const BorderSide(color: FlickerColors.muted),
                     ),
-                    onPressed: () => _respond(context, entry, false),
+                    onPressed: busy ? null : () => _respond(entry, false),
                     child: const Text('Not for me'),
                   ),
-                  const SizedBox(width: 8),
                   FilledButton(
-                    onPressed: () => _respond(context, entry, true),
-                    child: Text(
-                      entry.isInvite ? 'Count me in' : 'Thanks!',
+                    style: FilledButton.styleFrom(
+                      backgroundColor: FlickerColors.primaryBright,
+                      foregroundColor: Colors.white,
                     ),
+                    onPressed: busy ? null : () => _respond(entry, true),
+                    child: Text(entry.isInvite ? 'Count me in' : 'Thanks!'),
                   ),
                 ],
               ),
+            ],
+            if (busy) ...[
+              const SizedBox(height: 8),
+              const LinearProgressIndicator(minHeight: 2),
             ],
           ],
         ),
@@ -164,16 +245,22 @@ class _InboxScreenState extends State<InboxScreen>
     );
   }
 
-  String _status(ActivityEntry entry) => entry.status;
+  String _statusLabel(String status) {
+    switch (status) {
+      case 'accepted':
+        return 'Accepted';
+      case 'declined':
+        return 'Declined';
+      default:
+        return 'New';
+    }
+  }
 
-  Future<void> _respond(
-    BuildContext context,
-    ActivityEntry entry,
-    bool accepted,
-  ) async {
+  Future<void> _respond(ActivityEntry entry, bool accepted) async {
+    setState(() => _busyId = entry.id);
     try {
       await ActivityService.respond(entry.id, accepted);
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -184,10 +271,28 @@ class _InboxScreenState extends State<InboxScreen>
         ),
       );
     } catch (e) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not respond: $e')),
       );
+    } finally {
+      if (mounted) setState(() => _busyId = null);
     }
+  }
+
+  void _openMovie(BuildContext context, ActivityEntry entry) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MovieDetailsScreen(
+          movie: {
+            'id': entry.movieId,
+            'title': entry.title,
+            'poster_path': entry.posterPath,
+            'media_type': entry.mediaType,
+          },
+        ),
+      ),
+    );
   }
 }

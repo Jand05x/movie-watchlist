@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -7,6 +9,7 @@ import '../services/tmdb_service.dart';
 import '../services/watchlist_service.dart';
 import '../theme/brand.dart';
 import '../widgets/animated_star_rating.dart';
+import '../widgets/app_error_state.dart';
 import '../widgets/genre_chip.dart';
 import '../widgets/poster_image.dart';
 import 'share_picker_screen.dart';
@@ -23,24 +26,36 @@ class MovieDetailsScreen extends StatefulWidget {
 class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   late Map<String, dynamic> _details;
   bool _loadingDetails = true;
+  String? _detailsError;
   bool _checking = true;
   bool _saving = false;
   bool _added = false;
   bool _watched = false;
   int? _rating;
   String _visibility = 'private';
+  StreamSubscription<Map<String, dynamic>?>? _watchlistSub;
+  StreamSubscription<Review?>? _reviewSub;
 
   int? get _tmdbId {
     final id = _details['id'] ?? widget.movie['id'];
     return id is num ? id.toInt() : null;
   }
 
+  bool get _ready => !_loadingDetails && _detailsError == null;
+
   @override
   void initState() {
     super.initState();
     _details = Map<String, dynamic>.from(widget.movie);
     _loadDetails();
-    _loadPersonalState();
+    _subscribePersonalState();
+  }
+
+  @override
+  void dispose() {
+    _watchlistSub?.cancel();
+    _reviewSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadDetails() async {
@@ -50,51 +65,67 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
       return;
     }
 
+    setState(() {
+      _loadingDetails = true;
+      _detailsError = null;
+    });
+
     final isTv = widget.movie['media_type'] == 'tv';
 
     try {
       final details = isTv
           ? await TmdbService.getTvDetails(id)
           : await TmdbService.getMovieDetails(id);
-      if (!mounted || details == null) return;
-      setState(() => _details = details);
-    } catch (_) {
+      if (!mounted) return;
+      if (details != null) setState(() => _details = details);
+    } catch (error) {
+      if (mounted) setState(() => _detailsError = error.toString());
     } finally {
       if (mounted) setState(() => _loadingDetails = false);
     }
   }
 
-  Future<void> _loadPersonalState() async {
+  void _subscribePersonalState() {
     final id = _tmdbId;
     if (id == null) {
-      if (mounted) setState(() => _checking = false);
+      _checking = false;
       return;
     }
 
-    try {
-      final exists = await WatchlistService.isInWatchlist(id);
-      final Review? review = await ReviewService.forMovie(id);
+    _watchlistSub = WatchlistService.entry(id).listen((entry) {
       if (!mounted) return;
-
       setState(() {
-        _added = exists;
-        _watched = review?.watched ?? false;
-        _rating = review?.rating;
-        _visibility = review?.visibility ?? 'private';
+        _added = entry != null;
         _checking = false;
       });
-    } catch (_) {
+    }, onError: (_) {
       if (mounted) setState(() => _checking = false);
-    }
+    });
+
+    _reviewSub = ReviewService.forMovieStream(id).listen((review) {
+      if (!mounted) return;
+      setState(() {
+        _watched = review?.watched ?? false;
+        _rating = review?.rating;
+        if (review != null) _visibility = review.visibility;
+        _checking = false;
+      });
+    }, onError: (_) {
+      if (mounted) setState(() => _checking = false);
+    });
   }
 
   Future<void> _addToWatchlist() async {
     setState(() => _saving = true);
 
     try {
-      await WatchlistService.add(_details);
+      await WatchlistService.add(
+        _details,
+        watched: _watched,
+        visibility: _visibility,
+        rating: _rating,
+      );
       if (!mounted) return;
-      setState(() => _added = true);
       _showMessage('Added to your watchlist!');
     } catch (e) {
       if (mounted) _showMessage('Could not add movie: $e');
@@ -105,7 +136,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
 
   Future<void> _saveRating() async {
     final rating = _rating;
-    if (rating == null) return;
+    if (rating == null || !_ready) return;
 
     setState(() => _saving = true);
 
@@ -124,7 +155,8 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   }
 
   Future<void> _toggleWatched(bool value) async {
-    setState(() => _watched = value);
+    if (!_ready || _saving) return;
+    setState(() => _saving = true);
 
     try {
       await ReviewService.setWatched(
@@ -136,10 +168,9 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
         _showMessage(value ? 'Marked as watched.' : 'Removed from watched.');
       }
     } catch (e) {
-      if (mounted) {
-        setState(() => _watched = !value);
-        _showMessage('Could not update: $e');
-      }
+      if (mounted) _showMessage('Could not update: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -172,6 +203,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
     final heroTag = 'poster-$mediaType-$id';
     final genres = (movie['genres'] as List?) ?? const [];
     final vote = movie['vote_average'];
+    final posterWidth = MediaQuery.sizeOf(context).width < 360 ? 112.0 : 140.0;
 
     return Scaffold(
       backgroundColor: FlickerColors.canvas,
@@ -199,16 +231,16 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       PosterImage(
                         path: posterPath,
-                        width: 140,
-                        height: 210,
+                        width: posterWidth,
+                        height: posterWidth * 1.5,
                         radius: 12,
                         heroTag: heroTag,
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -219,7 +251,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 24,
+                                fontSize: 22,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -232,12 +264,14 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                                   size: 19,
                                 ),
                                 const SizedBox(width: 5),
-                                Text(
-                                  vote is num ? vote.toStringAsFixed(1) : 'N/A',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
+                                Flexible(
+                                  child: Text(
+                                    vote is num ? vote.toStringAsFixed(1) : 'N/A',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -249,6 +283,8 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                                 color: Colors.white70,
                                 fontSize: 13,
                               ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ],
                         ),
@@ -261,6 +297,13 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                       minHeight: 2,
                       color: FlickerColors.primaryBright,
                       backgroundColor: Colors.transparent,
+                    ),
+                  ],
+                  if (_detailsError != null) ...[
+                    const SizedBox(height: 12),
+                    AppErrorState(
+                      message: 'Could not load full details.\n$_detailsError',
+                      onRetry: _loadDetails,
                     ),
                   ],
                   const SizedBox(height: 22),
@@ -349,7 +392,9 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
           const SizedBox(height: 12),
           AnimatedStarRating(
             rating: _rating ?? 0,
-            onChanged: (value) => setState(() => _rating = value),
+            onChanged: _ready && !_saving
+                ? (value) => setState(() => _rating = value)
+                : null,
           ),
           const SizedBox(height: 4),
           Text(
@@ -360,7 +405,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: _watched,
-            onChanged: _toggleWatched,
+            onChanged: _ready && !_saving ? _toggleWatched : null,
             activeThumbColor: FlickerColors.primaryBright,
             secondary: const Icon(Icons.check_circle_outline, color: FlickerColors.primaryBright),
             title: const Text(
@@ -381,7 +426,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                 side: const BorderSide(color: FlickerColors.primaryBright),
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
-              onPressed: _sendToFriends,
+              onPressed: _ready ? _sendToFriends : null,
               icon: const Icon(Icons.send_outlined),
               label: const Text('Send to a friend'),
             ),
@@ -395,7 +440,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
-              onPressed: _rating == null || _saving ? null : _saveRating,
+              onPressed: _rating == null || _saving || !_ready ? null : _saveRating,
               icon: const Icon(Icons.save_outlined),
               label: Text(_saving ? 'Saving...' : 'Save rating'),
             ),

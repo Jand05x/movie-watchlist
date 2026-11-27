@@ -26,6 +26,8 @@ class _SharePickerScreenState extends State<SharePickerScreen> {
   final Set<String> _selected = {};
   bool _invite = false;
   bool _sending = false;
+  String? _status;
+  int _refreshKey = 0;
 
   @override
   void dispose() {
@@ -33,26 +35,44 @@ class _SharePickerScreenState extends State<SharePickerScreen> {
     super.dispose();
   }
 
+  void _retry() {
+    if (mounted) setState(() => _refreshKey++);
+  }
+
   Future<void> _send() async {
     if (_selected.isEmpty) return;
 
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _status = null;
+    });
     try {
-      await ActivityService.shareWithFriends(
+      final total = _selected.length;
+      final sent = await ActivityService.shareWithFriends(
         widget.movie,
         friendUids: _selected.toList(),
         kind: _invite ? 'watch_together' : 'movie',
         note: _note.text,
       );
-      if (mounted) Navigator.pop(context, true);
+      if (!mounted) return;
+
+      setState(() {
+        _sending = false;
+        _status = sent == total
+            ? sent == 1
+                ? 'Sent to 1 friend.'
+                : 'Sent to $sent friends.'
+            : 'Sent to $sent of $total friends. Some shares failed.';
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (mounted) Navigator.pop(context, sent > 0);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Could not send: $e')));
+        setState(() {
+          _sending = false;
+          _status = 'Could not send: $e';
+        });
       }
-    } finally {
-      if (mounted) setState(() => _sending = false);
     }
   }
 
@@ -67,9 +87,20 @@ class _SharePickerScreenState extends State<SharePickerScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-            child: Text(
-              'Choose friends to send "$title" to. Nothing is posted publicly.',
-              style: FlickerText.caption,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Choose friends to send "$title" to. Nothing is posted publicly.',
+                  style: FlickerText.caption,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (_status != null) ...[
+                  const SizedBox(height: 10),
+                  Text(_status!, style: FlickerText.body),
+                ],
+              ],
             ),
           ),
           SwitchListTile(
@@ -90,13 +121,17 @@ class _SharePickerScreenState extends State<SharePickerScreen> {
           const SizedBox(height: 8),
           Expanded(
             child: StreamBuilder<List<Friendship>>(
+              key: ValueKey('share-friends-$_refreshKey'),
               stream: FriendService.friends(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const AppLoading();
+                  return const AppLoading(message: 'Loading friends...');
                 }
                 if (snapshot.hasError) {
-                  return AppErrorState(message: '${snapshot.error}');
+                  return AppErrorState(
+                    message: 'Could not load friends.\n${snapshot.error}',
+                    onRetry: _retry,
+                  );
                 }
 
                 final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -109,9 +144,20 @@ class _SharePickerScreenState extends State<SharePickerScreen> {
                   );
                 }
 
+                final friendUids = friends
+                    .map((friendship) => friendship.otherUser(uid))
+                    .where((friendUid) => friendUid.isNotEmpty)
+                    .toList();
+                if (friendUids.isEmpty) {
+                  return const AppEmptyState(
+                    icon: Icons.people_outline,
+                    title: 'No friends yet',
+                    message: 'Add friends before sending movies.',
+                  );
+                }
+
                 return ListView(
-                  children: friends.map((friendship) {
-                    final friendUid = friendship.otherUser(uid);
+                  children: friendUids.map((friendUid) {
                     return FutureBuilder<UserProfile?>(
                       future: UserService.profile(friendUid),
                       builder: (context, profileSnapshot) {

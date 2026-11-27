@@ -8,6 +8,36 @@ import 'watchlist_service.dart';
 class ReviewService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  static const Map<int, String> _genreNames = {
+    12: 'Adventure',
+    14: 'Fantasy',
+    16: 'Animation',
+    18: 'Drama',
+    27: 'Horror',
+    28: 'Action',
+    35: 'Comedy',
+    36: 'History',
+    37: 'Western',
+    53: 'Thriller',
+    80: 'Crime',
+    99: 'Documentary',
+    878: 'Science Fiction',
+    9648: 'Mystery',
+    10402: 'Music',
+    10749: 'Romance',
+    10751: 'Family',
+    10752: 'War',
+    10759: 'Action & Adventure',
+    10762: 'Kids',
+    10763: 'News',
+    10764: 'Reality',
+    10765: 'Sci-Fi & Fantasy',
+    10766: 'Soap',
+    10767: 'Talk',
+    10768: 'War & Politics',
+    10770: 'TV Movie',
+  };
+
   static String get _uid {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -20,7 +50,7 @@ class ReviewService {
       _db.collection('users').doc(_uid).collection('reviews');
 
   static int _id(Map<String, dynamic> movie) {
-    final id = movie['id'];
+    final id = movie['id'] ?? movie['tmdbId'] ?? movie['tmdb_id'];
     if (id is! num) throw ArgumentError('Movie ID is missing.');
     return id.toInt();
   }
@@ -29,18 +59,24 @@ class ReviewService {
     final raw = movie['genres'];
     if (raw is List) {
       return raw.whereType<Map>().map((genre) {
-        return <String, dynamic>{
-          'id': genre['id'] ?? 0,
-          'name': genre['name'] ?? '',
-        };
+        final id = genre['id'];
+        final genreId = id is num ? id.toInt() : 0;
+        final name = (genre['name'] as String?)?.trim().isNotEmpty == true
+            ? (genre['name'] as String).trim()
+            : _genreNames[genreId] ?? '';
+        return <String, dynamic>{'id': genreId, 'name': name};
       }).toList();
     }
 
     final ids = movie['genre_ids'];
     if (ids is List) {
-      return ids
-          .map((id) => <String, dynamic>{'id': id, 'name': ''})
-          .toList();
+      return ids.whereType<num>().map((rawId) {
+        final genreId = rawId.toInt();
+        return <String, dynamic>{
+          'id': genreId,
+          'name': _genreNames[genreId] ?? '',
+        };
+      }).toList();
     }
 
     return const [];
@@ -50,8 +86,8 @@ class ReviewService {
     return {
       'tmdbId': _id(movie),
       'title': movie['title'] ?? movie['name'] ?? 'Untitled',
-      'posterPath': movie['poster_path'] ?? '',
-      'mediaType': movie['media_type'] ?? 'movie',
+      'posterPath': movie['poster_path'] ?? movie['posterPath'] ?? '',
+      'mediaType': movie['media_type'] ?? movie['mediaType'] ?? 'movie',
       'genres': _genres(movie),
     };
   }
@@ -69,10 +105,55 @@ class ReviewService {
   }
 
   static Future<List<Review>> allReviews() async {
-    final snapshot = await _reviews.limit(500).get();
-    return snapshot.docs.map((document) {
-      return Review.fromMap(document.data());
-    }).toList();
+    final snapshot = await _reviews.get();
+    return snapshot.docs
+        .map((document) => Review.fromMap(document.data()))
+        .toList();
+  }
+
+  static Future<Map<String, dynamic>?> snapshot(int tmdbId) async {
+    final document = await _reviews.doc(tmdbId.toString()).get();
+    return document.exists ? document.data() : null;
+  }
+
+  static Future<void> restore(Map<String, dynamic> review) async {
+    final id = review['tmdbId'] ?? review['id'];
+    if (id is! num) return;
+    await _reviews.doc(id.toInt().toString()).set(review);
+    await TasteService.recompute();
+  }
+
+  static Future<void> remove(int tmdbId) async {
+    await _reviews.doc(tmdbId.toString()).delete();
+    await TasteService.recompute();
+  }
+
+  static Future<void> _commit({
+    required Map<String, dynamic> movie,
+    required Map<String, dynamic> reviewData,
+    required bool watched,
+    String? visibility,
+    int? rating,
+  }) async {
+    final id = _id(movie);
+    final watchlistRef = WatchlistService.entryRef(id);
+    final existingEntry = await watchlistRef.get();
+
+    final batch = _db.batch();
+    batch.set(_reviews.doc(id.toString()), reviewData, SetOptions(merge: true));
+    batch.set(
+      watchlistRef,
+      WatchlistService.moviePayload(
+        movie,
+        watched: watched,
+        visibility: visibility,
+        rating: rating,
+        includeCreatedAt: !existingEntry.exists,
+      ),
+      SetOptions(merge: true),
+    );
+    await batch.commit();
+    await TasteService.recompute();
   }
 
   static Future<void> setWatched(
@@ -81,15 +162,8 @@ class ReviewService {
     required String visibility,
   }) async {
     final id = _id(movie);
-    final document = _reviews.doc(id.toString());
-    final existing = await document.get();
+    final existing = await _reviews.doc(id.toString()).get();
     final current = existing.exists ? Review.fromMap(existing.data()!) : null;
-
-    if (current != null &&
-        current.watched == watched &&
-        current.visibility == visibility) {
-      return;
-    }
 
     final data = <String, dynamic>{
       ..._movieData(movie),
@@ -97,23 +171,19 @@ class ReviewService {
       'visibility': visibility,
       'updatedAt': FieldValue.serverTimestamp(),
       'timestamp': FieldValue.serverTimestamp(),
+      if (watched)
+        'watchedAt': current?.watchedAt != null
+            ? Timestamp.fromDate(current!.watchedAt!)
+            : FieldValue.serverTimestamp()
+      else
+        'watchedAt': FieldValue.delete(),
     };
-
-    if (watched) {
-      data['watchedAt'] = current?.watchedAt != null
-          ? Timestamp.fromDate(current!.watchedAt!)
-          : FieldValue.serverTimestamp();
-    } else {
-      data['watchedAt'] = FieldValue.delete();
-    }
-
-    await document.set(data, SetOptions(merge: true));
-    await WatchlistService.setReviewFlags(
-      id,
+    await _commit(
+      movie: movie,
+      reviewData: data,
       watched: watched,
       visibility: visibility,
     );
-    TasteService.recompute();
   }
 
   static Future<void> setRating(
@@ -127,16 +197,8 @@ class ReviewService {
     }
 
     final id = _id(movie);
-    final document = _reviews.doc(id.toString());
-    final existing = await document.get();
+    final existing = await _reviews.doc(id.toString()).get();
     final current = existing.exists ? Review.fromMap(existing.data()!) : null;
-
-    if (current != null &&
-        current.rating == rating &&
-        current.visibility == visibility &&
-        (note == null || current.note == note)) {
-      return;
-    }
 
     final data = <String, dynamic>{
       ..._movieData(movie),
@@ -152,14 +214,13 @@ class ReviewService {
     };
     if (note != null) data['note'] = note;
 
-    await document.set(data, SetOptions(merge: true));
-    await WatchlistService.setReviewFlags(
-      id,
+    await _commit(
+      movie: movie,
+      reviewData: data,
       watched: true,
-      rating: rating,
       visibility: visibility,
+      rating: rating,
     );
-    TasteService.recompute();
   }
 
   static Future<void> setVisibility(
@@ -168,20 +229,31 @@ class ReviewService {
   }) async {
     final document = _reviews.doc(tmdbId.toString());
     final snapshot = await document.get();
-    final watched = snapshot.exists && snapshot.get('watched') == true;
+    final data = snapshot.exists ? snapshot.data()! : <String, dynamic>{};
+    final watched = data['watched'] == true;
+    final rating = data['rating'] is num ? (data['rating'] as num).toInt() : null;
 
+    final batch = _db.batch();
     if (snapshot.exists) {
-      await document.set({
+      batch.set(document, {
         'visibility': visibility,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
 
-    await WatchlistService.setReviewFlags(
-      tmdbId,
-      watched: watched,
-      visibility: visibility,
+    final watchlistRef = WatchlistService.entryRef(tmdbId);
+    final existingEntry = await watchlistRef.get();
+    batch.set(
+      watchlistRef,
+      {
+        'watched': watched,
+        'visibility': visibility,
+        'rating': ?rating,
+        if (!existingEntry.exists) 'added_at': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
     );
+    await batch.commit();
   }
 
   static Future<void> setNote(int tmdbId, String note) async {

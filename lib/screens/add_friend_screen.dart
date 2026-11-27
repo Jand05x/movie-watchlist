@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import '../models/user_profile.dart';
 import '../services/friend_service.dart';
 import '../services/user_service.dart';
+import '../theme/brand.dart';
+import '../widgets/initials_avatar.dart';
 
 class AddFriendScreen extends StatefulWidget {
   const AddFriendScreen({super.key});
@@ -18,6 +20,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
   bool _searching = false;
   bool _sending = false;
   String? _error;
+  String? _status;
   UserProfile? _result;
 
   @override
@@ -33,13 +36,17 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
     setState(() {
       _searching = true;
       _error = null;
+      _status = null;
       _result = null;
     });
 
     try {
-      final profile = query.contains('@')
-          ? await UserService.findByEmail(query)
-          : await UserService.findByUsername(query);
+      final isUsername = query.startsWith('@');
+      final username = isUsername ? query.substring(1).trim() : query;
+      final profile = isUsername
+          ? await UserService.findByUsername(username)
+          : await UserService.findByEmail(query) ??
+              await UserService.findByUsername(username);
 
       if (!mounted) return;
 
@@ -51,7 +58,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
         setState(() => _result = profile);
       }
     } catch (e) {
-      if (mounted) setState(() => _error = 'Search failed: $e');
+      if (mounted) setState(() => _error = 'Could not search: $e');
     } finally {
       if (mounted) setState(() => _searching = false);
     }
@@ -61,138 +68,162 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
     final profile = _result;
     if (profile == null) return;
 
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _error = null;
+      _status = null;
+    });
 
     try {
-      await FriendService.sendRequest(profile.uid);
+      final result = await FriendService.sendRequest(profile.uid);
       if (!mounted) return;
-      Navigator.pop(context, true);
+
+      setState(() {
+        _status = result.message;
+        _sending = false;
+      });
+
+      if (result.didSend) {
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        if (mounted) Navigator.pop(context, true);
+      }
     } catch (e) {
-      if (mounted) setState(() => _error = 'Could not send request: $e');
-    } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() {
+          _error = 'Could not send request: $e';
+          _sending = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF141414),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF141414),
-        title: const Text('Add Friend'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Find by email or username',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+      backgroundColor: FlickerColors.canvas,
+      appBar: AppBar(title: const Text('Add Friend')),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Find by email or username',
+                style: FlickerText.section,
               ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    style: const TextStyle(color: Colors.white),
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => _search(),
-                    decoration: InputDecoration(
-                      hintText: 'email@example.com or @username',
-                      hintStyle: const TextStyle(color: Colors.white54),
-                      filled: true,
-                      fillColor: const Color(0xFF252525),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
+              const SizedBox(height: 4),
+              const Text(
+                'Use @username for a username, or an email address.',
+                style: FlickerText.caption,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _controller,
+                style: FlickerText.body,
+                textInputAction: TextInputAction.search,
+                autocorrect: false,
+                onSubmitted: (_) => _search(),
+                decoration: const InputDecoration(
+                  hintText: 'email@example.com or @username',
                 ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFE50914),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 17,
-                    ),
-                  ),
-                  onPressed: _searching ? null : _search,
-                  child: _searching
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Text('Search'),
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: FlickerColors.primaryBright,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                onPressed: _searching ? null : _search,
+                child: _searching
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Text('Search'),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 16),
+                Text(
+                  _error!,
+                  style: FlickerText.body.copyWith(color: FlickerColors.danger),
                 ),
               ],
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                _error!,
-                style: const TextStyle(color: Color(0xFFE50914)),
-              ),
-            ],
-            if (_result != null) ...[
-              const SizedBox(height: 24),
-              Card(
-                color: const Color(0xFF252525),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      const CircleAvatar(
-                        backgroundColor: Color(0xFF3A3A3A),
-                        child: Icon(Icons.person, color: Colors.white70),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+              if (_status != null) ...[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: FlickerColors.roseWash,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(_status!, style: FlickerText.body),
+                ),
+              ],
+              if (_result != null) ...[
+                const SizedBox(height: 24),
+                Card(
+                  color: FlickerColors.surface,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
                           children: [
-                            Text(
-                              _result!.label,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
+                            InitialsAvatar(
+                              name: _result!.label,
+                              imageUrl: _result!.avatarUrl,
+                              radius: 24,
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '@${_result!.username}',
-                              style: const TextStyle(color: Colors.white60),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _result!.label,
+                                    style: FlickerText.body.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '@${_result!.username}',
+                                    style: FlickerText.caption,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
-                      ),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFE50914),
-                          foregroundColor: Colors.white,
+                        const SizedBox(height: 16),
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: FlickerColors.primaryBright,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          onPressed: _sending ? null : _send,
+                          icon: const Icon(Icons.person_add_alt_1),
+                          label: Text(_sending ? 'Sending...' : 'Send request'),
                         ),
-                        onPressed: _sending ? null : _send,
-                        child: Text(_sending ? 'Sending...' : 'Add'),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

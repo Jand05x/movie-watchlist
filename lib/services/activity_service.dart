@@ -5,7 +5,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/activity_entry.dart';
 import 'friend_service.dart';
-import 'notification_service.dart';
 import 'user_service.dart';
 
 class ActivityService {
@@ -31,7 +30,7 @@ class ActivityService {
   }
 
   static Map<String, dynamic> _movieData(Map<String, dynamic> movie) {
-    final id = movie['id'] ?? movie['tmdbId'];
+    final id = movie['id'] ?? movie['tmdbId'] ?? movie['tmdb_id'];
     if (id is! num) throw ArgumentError('Movie ID is missing.');
 
     return {
@@ -83,20 +82,34 @@ class ActivityService {
         'read': false,
         'timestamp': FieldValue.serverTimestamp(),
       },
+      SetOptions(merge: true),
     );
     await batch.commit();
   }
 
-  static Future<void> shareWithFriends(
+  static Future<int> shareWithFriends(
     Map<String, dynamic> movie, {
     required List<String> friendUids,
     String kind = 'movie',
     String note = '',
   }) async {
     final recipients = friendUids.toSet().where((uid) => uid != _uid).toList();
+    final errors = <String>[];
+    var sent = 0;
+
     for (final uid in recipients) {
-      await share(movie, friendUid: uid, kind: kind, note: note);
+      try {
+        await share(movie, friendUid: uid, kind: kind, note: note);
+        sent += 1;
+      } catch (error) {
+        errors.add('$uid: $error');
+      }
     }
+
+    if (sent == 0 && errors.isNotEmpty) {
+      throw StateError('Could not send: ${errors.join('; ')}');
+    }
+    return sent;
   }
 
   static Stream<List<ActivityEntry>> feed() {
@@ -120,7 +133,6 @@ class ActivityService {
   static Stream<List<ActivityEntry>> inbox() {
     return _shares
         .where('recipientUid', isEqualTo: _uid)
-        .where('status', isEqualTo: 'sent')
         .orderBy('timestamp', descending: true)
         .limit(50)
         .snapshots()
@@ -154,47 +166,73 @@ class ActivityService {
         );
   }
 
+  static Future<ActivityEntry?> shareById(String shareId) async {
+    final document = await _shares
+        .doc(shareId)
+        .get(const GetOptions(source: Source.server));
+    if (!document.exists) return null;
+    return ActivityEntry.fromMap(document.data()!, document.id);
+  }
+
   static Future<void> respond(String shareId, bool accepted) async {
     final document = _shares.doc(shareId);
-    final snapshot = await document.get();
+    final snapshot = await document.get(const GetOptions(source: Source.server));
     if (!snapshot.exists) return;
 
     final data = snapshot.data()!;
+    if (data['recipientUid'] != _uid) {
+      throw StateError('Only the recipient can respond to a share.');
+    }
+    if (data['status'] != 'sent') {
+      throw StateError('You have already responded to this share.');
+    }
+
     final senderUid = (data['senderUid'] as String?) ?? '';
-    final recipientUid = (data['recipientUid'] as String?) ?? '';
     final title = (data['title'] as String?) ?? 'this movie';
     final status = accepted ? 'accepted' : 'declined';
     final isInvite = data['kind'] == 'watch_together';
+    final profile = await UserService.profile(_uid);
+    final name = profile?.displayName ?? profile?.label ?? 'Your friend';
 
     final batch = _db.batch();
     batch.update(document, {
       'status': status,
       'respondedAt': FieldValue.serverTimestamp(),
     });
-    batch.set(_feed(recipientUid).doc(shareId), {
-      'status': status,
-    }, SetOptions(merge: true));
-    await batch.commit();
-
-    final profile = await UserService.profile(_uid);
-    final name = profile?.displayName ?? 'Your friend';
-    await NotificationService.push(
-      senderUid,
-      type: isInvite ? 'watch_reply' : 'share_reply',
-      title: isInvite ? 'Watch night set' : 'Share reply',
-      body: accepted
-          ? '$name said yes to $title'
-          : '$name passed on $title',
-      shareId: shareId,
+    batch.set(_feed(_uid).doc(shareId), {'status': status}, SetOptions(merge: true));
+    batch.set(
+      _db.collection('users').doc(_uid).collection('notifications').doc(shareId),
+      {'read': true},
+      SetOptions(merge: true),
     );
+    batch.set(
+      _db
+          .collection('users')
+          .doc(senderUid)
+          .collection('notifications')
+          .doc('${shareId}_response'),
+      {
+        'type': isInvite ? 'watch_reply' : 'share_reply',
+        'title': isInvite ? 'Watch night set' : 'Share reply',
+        'body': accepted ? '$name said yes to $title' : '$name passed on $title',
+        'actorUid': _uid,
+        'shareId': shareId,
+        'read': false,
+        'timestamp': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+    await batch.commit();
   }
 
   static Future<void> react(String shareId, String emoji) async {
     final document = _shares.doc(shareId);
-    final snapshot = await document.get();
+    final snapshot = await document.get(const GetOptions(source: Source.server));
     if (!snapshot.exists) return;
+    if (snapshot.get('recipientUid') != _uid) {
+      throw StateError('Only the recipient can react to a share.');
+    }
 
-    final recipientUid = (snapshot.get('recipientUid') as String?) ?? '';
     final reactions = Map<String, dynamic>.from(
       snapshot.get('reactions') as Map? ?? const {},
     );
@@ -202,7 +240,7 @@ class ActivityService {
 
     final batch = _db.batch();
     batch.set(document, {'reactions': reactions}, SetOptions(merge: true));
-    batch.set(_feed(recipientUid).doc(shareId), {
+    batch.set(_feed(_uid).doc(shareId), {
       'reactions': reactions,
     }, SetOptions(merge: true));
     await batch.commit();

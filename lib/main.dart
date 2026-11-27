@@ -8,6 +8,7 @@ import 'firebase_options.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
 import 'services/auth_service.dart';
+import 'services/user_service.dart';
 import 'theme/brand.dart';
 import 'widgets/app_loading.dart';
 
@@ -98,7 +99,10 @@ class FlickerApp extends StatelessWidget {
           ),
         ),
         home: StreamBuilder<User?>(
-          stream: FirebaseAuth.instance.authStateChanges(),
+          stream: FirebaseAuth.instance.authStateChanges().map((user) {
+            UserService.clearCache();
+            return user;
+          }),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Scaffold(body: AppLoading());

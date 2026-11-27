@@ -17,6 +17,12 @@ class UserService {
     return value.trim().toLowerCase().replaceFirst(RegExp(r'^@'), '');
   }
 
+  static void clearCache() => _cache.clear();
+
+  static bool usernameMatchesProfile(String requested, UserProfile profile) {
+    return normalize(requested) == normalize(profile.username);
+  }
+
   static bool isValidUsername(String value) {
     final name = normalize(value);
     return RegExp(r'^[a-z0-9_]{3,20}$').hasMatch(name);
@@ -58,6 +64,7 @@ class UserService {
         'avatarUrl': '',
         'discoverable': true,
         'tasteShared': true,
+        'schemaVersion': 2,
         'createdAt': FieldValue.serverTimestamp(),
       });
     });
@@ -91,7 +98,13 @@ class UserService {
     final cached = _cache[uid];
     if (cached != null) return cached;
 
-    final document = await _users.doc(uid).get();
+    return fetchProfile(uid);
+  }
+
+  static Future<UserProfile?> fetchProfile(String uid) async {
+    final document = await _users
+        .doc(uid)
+        .get(const GetOptions(source: Source.server));
     if (!document.exists) return null;
 
     final result = UserProfile.fromMap(document.data()!, document.id);
@@ -139,7 +152,7 @@ class UserService {
     final snapshot = await _users
         .where('email', isEqualTo: address)
         .limit(1)
-        .get();
+        .get(const GetOptions(source: Source.server));
     if (snapshot.docs.isEmpty) return null;
 
     final document = snapshot.docs.first;
@@ -150,12 +163,29 @@ class UserService {
     final name = normalize(username);
     if (name.isEmpty) return null;
 
-    final reservation = await _db.collection('usernames').doc(name).get();
-    if (!reservation.exists) return null;
+    final reservation = await _db
+        .collection('usernames')
+        .doc(name)
+        .get(const GetOptions(source: Source.server));
+    if (reservation.exists) {
+      final uid = reservation.get('uid') as String?;
+      if (uid != null) {
+        final profile = await fetchProfile(uid);
+        if (profile != null && usernameMatchesProfile(name, profile)) {
+          return profile;
+        }
+      }
+    }
 
-    final uid = reservation.get('uid') as String?;
-    if (uid == null) return null;
-    return profile(uid);
+    final byProfile = await _users
+        .where('username', isEqualTo: name)
+        .limit(1)
+        .get(const GetOptions(source: Source.server));
+    if (byProfile.docs.isEmpty) return null;
+
+    final document = byProfile.docs.first;
+    final profile = UserProfile.fromMap(document.data(), document.id);
+    return usernameMatchesProfile(name, profile) ? profile : null;
   }
 
   static Future<List<UserProfile>> search(String query) async {

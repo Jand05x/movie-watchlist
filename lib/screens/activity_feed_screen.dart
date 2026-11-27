@@ -12,27 +12,42 @@ import '../widgets/initials_avatar.dart';
 import '../widgets/poster_image.dart';
 import 'movie_details_screen.dart';
 
-class ActivityFeedScreen extends StatelessWidget {
+class ActivityFeedScreen extends StatefulWidget {
   final bool embedded;
   final int? limit;
 
   const ActivityFeedScreen({super.key, this.embedded = false, this.limit});
 
   @override
+  State<ActivityFeedScreen> createState() => _ActivityFeedScreenState();
+}
+
+class _ActivityFeedScreenState extends State<ActivityFeedScreen> {
+  int _refreshKey = 0;
+
+  void _retry() {
+    if (mounted) setState(() => _refreshKey++);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final body = StreamBuilder<List<ActivityEntry>>(
+      key: ValueKey('feed-$_refreshKey'),
       stream: ActivityService.feed(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const AppLoading(message: 'Loading your circle...');
         }
         if (snapshot.hasError) {
-          return AppErrorState(message: 'Could not load activity.\n${snapshot.error}');
+          return AppErrorState(
+            message: 'Could not load activity.\n${snapshot.error}',
+            onRetry: _retry,
+          );
         }
 
         var entries = snapshot.data ?? [];
-        if (limit != null && entries.length > limit!) {
-          entries = entries.sublist(0, limit!);
+        if (widget.limit != null && entries.length > widget.limit!) {
+          entries = entries.sublist(0, widget.limit!);
         }
 
         if (entries.isEmpty) {
@@ -52,7 +67,7 @@ class ActivityFeedScreen extends StatelessWidget {
       },
     );
 
-    if (embedded) return body;
+    if (widget.embedded) return body;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Your Circle')),
@@ -109,6 +124,8 @@ class ActivityFeedScreen extends StatelessWidget {
                                 ),
                               ],
                             ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           );
                         },
                       ),
@@ -141,23 +158,30 @@ class ActivityFeedScreen extends StatelessWidget {
                           style: FlickerText.body.copyWith(
                             fontWeight: FontWeight.w700,
                           ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 6),
-                        Row(
+                        Wrap(
+                          spacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            if (entry.rating != null) ...[
-                              const Icon(
-                                Icons.star_rounded,
-                                color: FlickerColors.amber,
-                                size: 15,
+                            if (entry.rating != null)
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.star_rounded,
+                                    color: FlickerColors.amber,
+                                    size: 15,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    entry.rating!.toStringAsFixed(0),
+                                    style: FlickerText.caption,
+                                  ),
+                                ],
                               ),
-                              const SizedBox(width: 4),
-                              Text(
-                                entry.rating!.toStringAsFixed(0),
-                                style: FlickerText.caption,
-                              ),
-                              const SizedBox(width: 10),
-                            ],
                             Text('Tap to view', style: FlickerText.caption),
                           ],
                         ),
@@ -169,7 +193,12 @@ class ActivityFeedScreen extends StatelessWidget {
             ),
             if (entry.note.isNotEmpty) ...[
               const SizedBox(height: 10),
-              Text('“${entry.note}”', style: FlickerText.caption),
+              Text(
+                '“${entry.note}”',
+                style: FlickerText.caption,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
             if (entry.reactions.isNotEmpty) ...[
               const SizedBox(height: 8),
@@ -178,21 +207,34 @@ class ActivityFeedScreen extends StatelessWidget {
                 style: const TextStyle(fontSize: 18),
               ),
             ],
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: ['❤️', '🔥', '😮'].map((emoji) {
-                return IconButton(
-                  visualDensity: VisualDensity.compact,
-                  tooltip: 'React $emoji',
-                  icon: Text(emoji, style: const TextStyle(fontSize: 16)),
-                  onPressed: () => ActivityService.react(entry.id, emoji),
-                );
-              }).toList(),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                children: ['❤️', '🔥', '😮'].map((emoji) {
+                  return IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'React $emoji',
+                    icon: Text(emoji, style: const TextStyle(fontSize: 16)),
+                    onPressed: () => _react(entry.id, emoji),
+                  );
+                }).toList(),
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _react(String shareId, String emoji) async {
+    try {
+      await ActivityService.react(shareId, emoji);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not react: $e')),
+      );
+    }
   }
 
   void _openMovie(BuildContext context, ActivityEntry entry) {

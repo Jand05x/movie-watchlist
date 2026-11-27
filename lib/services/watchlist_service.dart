@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../models/model_helpers.dart';
+
 class WatchlistService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -17,50 +19,110 @@ class WatchlistService {
   static CollectionReference<Map<String, dynamic>> get _col =>
       _db.collection('users').doc(_uid).collection('watchlist');
 
-  static Future<void> add(Map<String, dynamic> movie) async {
-    final id = movie['id'];
+  static DocumentReference<Map<String, dynamic>> entryRef(int tmdbId) =>
+      _col.doc(tmdbId.toString());
 
-    if (id == null) {
-      throw ArgumentError('Movie ID is missing.');
-    }
+  static Map<String, dynamic> moviePayload(
+    Map<String, dynamic> movie, {
+    required bool watched,
+    String? visibility,
+    int? rating,
+    bool includeCreatedAt = false,
+  }) {
+    final id = movie['id'] ?? movie['tmdb_id'] ?? movie['tmdbId'];
+    if (id is! num) throw ArgumentError('Movie ID is missing.');
 
+    return {
+      'tmdb_id': id.toInt(),
+      'title': movie['title'] ?? movie['name'] ?? 'Untitled',
+      'poster_path': movie['poster_path'] ?? movie['posterPath'] ?? '',
+      'media_type': movie['media_type'] ?? movie['mediaType'] ?? 'movie',
+      'visibility': visibility ?? 'private',
+      'watched': watched,
+      'rating': ?rating,
+      if (includeCreatedAt) 'added_at': FieldValue.serverTimestamp(),
+    };
+  }
+
+  static Future<void> add(
+    Map<String, dynamic> movie, {
+    bool? watched,
+    String? visibility,
+    int? rating,
+  }) async {
+    final payload = moviePayload(
+      movie,
+      watched: watched ?? false,
+      visibility: visibility,
+      rating: rating,
+      includeCreatedAt: true,
+    );
+    final id = payload['tmdb_id'] as int;
     final document = _col.doc(id.toString());
     final existing = await document.get();
-    if (existing.exists) return;
 
-    await document.set({
-      'tmdb_id': id,
-      'title': movie['title'] ?? movie['name'] ?? 'Untitled',
-      'poster_path': movie['poster_path'] ?? '',
-      'media_type': movie['media_type'] ?? 'movie',
-      'visibility': 'private',
-      'watched': false,
-      'added_at': FieldValue.serverTimestamp(),
-    });
+    if (existing.exists) {
+      final data = existing.data()!;
+      await document.set({
+        'title': data['title'] ?? payload['title'],
+        'poster_path': data['poster_path'] ?? payload['poster_path'],
+        'media_type': data['media_type'] ?? payload['media_type'],
+        'visibility': data['visibility'] ?? payload['visibility'],
+        'watched': data['watched'] ?? payload['watched'],
+        if (data['rating'] != null || rating != null)
+          'rating': data['rating'] ?? rating,
+        if (parseDate(data['added_at']) == null)
+          'added_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return;
+    }
+
+    await document.set(payload);
   }
 
   static Future<void> restore(Map<String, dynamic> entry) async {
     final id = entry['tmdb_id'];
     if (id == null) return;
 
-    await _col.doc(id.toString()).set(entry);
+    final data = Map<String, dynamic>.from(entry);
+    if (parseDate(data['added_at']) == null) {
+      data['added_at'] = FieldValue.serverTimestamp();
+    }
+    await _col.doc(id.toString()).set(data, SetOptions(merge: true));
   }
 
   static Future<void> remove(int tmdbId) async {
     await _col.doc(tmdbId.toString()).delete();
   }
 
+  static Stream<List<Map<String, dynamic>>> allEntries() =>
+      _col.snapshots().map(
+            (snapshot) => snapshot.docs
+                .map((document) => document.data())
+                .toList(),
+          );
+
   static Stream<List<Map<String, dynamic>>> watchlist({
     String sort = 'recent',
   }) {
-    final query = sort == 'title'
-        ? _col.orderBy('title')
-        : _col.orderBy('added_at', descending: true);
+    return allEntries().map((entries) {
+      final items = List<Map<String, dynamic>>.from(entries);
+      items.sort((a, b) {
+        if (sort == 'title') {
+          final left = (a['title'] as String?) ?? 'Untitled';
+          final right = (b['title'] as String?) ?? 'Untitled';
+          return left.toLowerCase().compareTo(right.toLowerCase());
+        }
 
-    return query.snapshots().map(
-          (snapshot) =>
-              snapshot.docs.map((document) => document.data()).toList(),
-        );
+        final left = parseDate(a['added_at']);
+        final right = parseDate(b['added_at']);
+        if (left == null && right == null) return 0;
+        if (left == null) return 1;
+        if (right == null) return -1;
+        return right.compareTo(left);
+      });
+      return items;
+    });
   }
 
   static Stream<Map<String, dynamic>?> entry(int tmdbId) {
@@ -81,9 +143,6 @@ class WatchlistService {
     int? rating,
   }) async {
     final document = _col.doc(tmdbId.toString());
-    final snapshot = await document.get();
-    if (!snapshot.exists) return;
-
     final data = <String, dynamic>{'watched': watched};
     if (visibility != null) data['visibility'] = visibility;
     if (rating != null) data['rating'] = rating;

@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/friendship.dart';
 import '../models/user_profile.dart';
 import '../services/auth_service.dart';
 import '../services/compatibility_service.dart';
@@ -9,27 +10,45 @@ import '../services/friend_service.dart';
 import '../services/taste_service.dart';
 import '../services/user_service.dart';
 import '../theme/brand.dart';
+import '../widgets/app_empty_state.dart';
 import '../widgets/app_error_state.dart';
 import '../widgets/app_loading.dart';
 import '../widgets/initials_avatar.dart';
-import '../widgets/section_header.dart';
 import 'notifications_screen.dart';
 import 'recap_screen.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   final String? friendUid;
 
   const ProfileScreen({super.key, this.friendUid});
 
   @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  int _refreshKey = 0;
+
+  void _refresh() {
+    if (!mounted) return;
+    setState(() => _refreshKey++);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final uid = friendUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+    final uid = widget.friendUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(friendUid == null ? 'Your Profile' : 'Friend Profile'),
+        title: Text(widget.friendUid == null ? 'Your Profile' : 'Friend Profile'),
         actions: [
-          if (friendUid == null)
+          if (widget.friendUid == null)
+            IconButton(
+              tooltip: 'Refresh',
+              icon: const Icon(Icons.refresh),
+              onPressed: _refresh,
+            ),
+          if (widget.friendUid == null)
             IconButton(
               tooltip: 'Notifications',
               icon: const Icon(Icons.notifications_none),
@@ -45,18 +64,25 @@ class ProfileScreen extends StatelessWidget {
         ],
       ),
       body: FutureBuilder<UserProfile?>(
+        key: ValueKey('profile-$_refreshKey'),
         future: UserService.profile(uid),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const AppLoading(message: 'Loading profile...');
           }
           if (snapshot.hasError) {
-            return AppErrorState(message: '${snapshot.error}');
+            return AppErrorState(
+              message: 'Could not load profile.\n${snapshot.error}',
+              onRetry: _refresh,
+            );
           }
 
           final profile = snapshot.data;
           if (profile == null) {
-            return const AppErrorState(message: 'Profile not found.');
+            return AppErrorState(
+              message: 'Profile not found.',
+              onRetry: _refresh,
+            );
           }
 
           return ListView(
@@ -64,9 +90,14 @@ class ProfileScreen extends StatelessWidget {
             children: [
               _header(context, profile),
               const SizedBox(height: 20),
-              if (friendUid == null) ...[
+              if (widget.friendUid == null) ...[
                 _tasteStats(uid),
-                const SectionHeader(title: 'Your taste match'),
+                const SizedBox(height: 8),
+                _sectionTitle(
+                  'Your taste match',
+                  'Score = shared genres (60%) + movies watched in common (40%). '
+                  'Both people need at least 3 ratings.',
+                ),
                 _compatibilityList(context),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
@@ -98,6 +129,10 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ),
               ] else ...[
+                _sectionTitle(
+                  'Taste match with ${profile.label}',
+                  'Based on genre overlap and watched movies in common.',
+                ),
                 _friendCompatibility(uid),
                 _tasteStats(uid),
               ],
@@ -108,20 +143,45 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
+  Widget _sectionTitle(String title, String subtitle) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: FlickerText.section),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: FlickerText.caption,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _header(BuildContext context, UserProfile profile) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         InitialsAvatar(
           name: profile.label,
           imageUrl: profile.avatarUrl,
           radius: 38,
         ),
-        const SizedBox(width: 16),
+        const SizedBox(width: 14),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(profile.label, style: FlickerText.display.copyWith(fontSize: 23)),
+              Text(
+                profile.label,
+                style: FlickerText.display.copyWith(fontSize: 23),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
               const SizedBox(height: 4),
               Text('@${profile.username}', style: FlickerText.caption),
               if (profile.bio.isNotEmpty) ...[
@@ -131,7 +191,7 @@ class ProfileScreen extends StatelessWidget {
             ],
           ),
         ),
-        if (friendUid == null)
+        if (widget.friendUid == null)
           IconButton(
             tooltip: 'Edit profile',
             icon: const Icon(Icons.edit_outlined),
@@ -219,6 +279,7 @@ class ProfileScreen extends StatelessWidget {
         discoverable: discoverable,
         tasteShared: tasteShared,
       );
+      _refresh();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Profile updated.')),
@@ -235,16 +296,25 @@ class ProfileScreen extends StatelessWidget {
 
   Widget _tasteStats(String uid) {
     return FutureBuilder<Map<String, dynamic>?>(
+      key: ValueKey('taste-$_refreshKey-$uid'),
       future: TasteService.forUser(uid),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const AppLoading(message: 'Loading taste profile...');
+        }
+        if (snapshot.hasError) {
+          return AppErrorState(
+            message: 'Could not load taste profile.\n${snapshot.error}',
+            onRetry: _refresh,
+          );
+        }
+
         final taste = snapshot.data;
         if (taste == null) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 18),
-            child: Text(
-              'Rate a few movies to build your taste profile.',
-              style: FlickerText.caption,
-            ),
+          return const AppEmptyState(
+            icon: Icons.movie_outlined,
+            title: 'No taste profile yet',
+            message: 'Rate at least 3 movies to build a taste profile.',
           );
         }
 
@@ -266,6 +336,7 @@ class ProfileScreen extends StatelessWidget {
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
+                runSpacing: 8,
                 children: genres.whereType<Map>().map((genre) {
                   return Chip(
                     label: Text('${genre['name']}'),
@@ -299,76 +370,137 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Widget _compatibilityList(BuildContext context) {
-    return StreamBuilder(
+    return StreamBuilder<List<Friendship>>(
+      key: ValueKey('friends-$_refreshKey'),
       stream: FriendService.friends(),
       builder: (context, snapshot) {
-        final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const AppLoading(message: 'Finding friends...');
+        }
+        if (snapshot.hasError) {
+          return AppErrorState(
+            message: 'Could not load friends.\n${snapshot.error}',
+            onRetry: _refresh,
+          );
+        }
+
+        final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
         final friends = (snapshot.data ?? [])
-            .map((friendship) => friendship.otherUser(uid))
+            .map((friendship) => friendship.otherUser(currentUid))
+            .where((uid) => uid.isNotEmpty)
             .toList();
         if (friends.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 10),
-            child: Text(
-              'Add friends to see taste compatibility.',
-              style: FlickerText.caption,
-            ),
+          return const AppEmptyState(
+            icon: Icons.people_outline,
+            title: 'No friends to compare yet',
+            message: 'Add a friend from the Friends tab to see your taste match.',
           );
         }
 
         return Column(
           children: friends.map((friendUid) {
-            return FutureBuilder(
-              future: UserService.profile(friendUid),
-              builder: (context, profileSnapshot) {
-                final name = profileSnapshot.data?.label ?? 'Friend';
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: InitialsAvatar(
-                    name: name,
-                    imageUrl: profileSnapshot.data?.avatarUrl,
-                    radius: 20,
-                  ),
-                  title: Text(name, style: FlickerText.body),
-                  subtitle: FutureBuilder(
-                    future: CompatibilityService.scoreWith(friendUid),
-                    builder: (context, scoreSnapshot) {
-                      final result = scoreSnapshot.data;
-                      if (result == null) {
-                        return const Text('Comparing taste...');
-                      }
-                      return Text(
-                        result.enoughData
-                            ? '${result.score}% · ${result.band}'
-                            : result.band,
-                        style: FlickerText.caption,
-                      );
-                    },
-                  ),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ProfileScreen(friendUid: friendUid),
-                      ),
-                    );
-                  },
-                );
-              },
-            );
+            return _friendMatchTile(context, friendUid);
           }).toList(),
         );
       },
     );
   }
 
+  Widget _friendMatchTile(BuildContext context, String friendUid) {
+    return FutureBuilder<UserProfile?>(
+      key: ValueKey('friend-profile-$friendUid-$_refreshKey'),
+      future: UserService.profile(friendUid),
+      builder: (context, profileSnapshot) {
+        final profile = profileSnapshot.data;
+        final name = profile?.label ?? 'Friend';
+        return Card(
+          color: FlickerColors.surface,
+          margin: const EdgeInsets.only(bottom: 8),
+          child: ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            leading: InitialsAvatar(
+              name: name,
+              imageUrl: profile?.avatarUrl,
+              radius: 20,
+            ),
+            title: Text(
+              name,
+              style: FlickerText.body,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: FutureBuilder<CompatibilityResult>(
+              key: ValueKey('match-$friendUid-$_refreshKey'),
+              future: CompatibilityService.scoreWith(friendUid),
+              builder: (context, scoreSnapshot) {
+                if (scoreSnapshot.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 4),
+                    child: Text('Comparing taste...'),
+                  );
+                }
+                if (scoreSnapshot.hasError) {
+                  return const Text('Could not compare taste.');
+                }
+                final result = scoreSnapshot.data;
+                if (result == null) return const Text('No match data.');
+
+                final headline = result.enoughData
+                    ? '${result.score}% · ${result.band}'
+                    : result.band;
+                final detail = result.sharedGenres.isNotEmpty
+                    ? 'Shared: ${result.sharedGenres.join(', ')}'
+                    : result.explanation;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(headline, style: FlickerText.caption),
+                    const SizedBox(height: 2),
+                    Text(
+                      detail,
+                      style: FlickerText.caption,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                );
+              },
+            ),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ProfileScreen(friendUid: friendUid),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
   Widget _friendCompatibility(String uid) {
-    return FutureBuilder(
+    return FutureBuilder<CompatibilityResult>(
+      key: ValueKey('friend-match-$uid-$_refreshKey'),
       future: CompatibilityService.scoreWith(uid),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const AppLoading(message: 'Comparing taste...');
+        }
+        if (snapshot.hasError) {
+          return AppErrorState(
+            message: 'Could not compare taste.\n${snapshot.error}',
+            onRetry: _refresh,
+          );
+        }
         final result = snapshot.data;
         if (result == null) {
-          return const AppLoading(message: 'Comparing taste...');
+          return const AppEmptyState(
+            icon: Icons.favorite_border,
+            title: 'No match available',
+            message: 'Taste information is not available yet.',
+          );
         }
 
         return Container(
@@ -385,19 +517,40 @@ class ProfileScreen extends StatelessWidget {
                 result.enoughData ? '${result.score}% match' : result.band,
                 style: FlickerText.display,
               ),
-              const SizedBox(height: 4),
-              Text(result.band, style: FlickerText.caption),
+              const SizedBox(height: 6),
+              Text(result.explanation, style: FlickerText.caption),
               if (result.sharedGenres.isNotEmpty) ...[
                 const SizedBox(height: 12),
+                Text('Shared genres', style: FlickerText.label),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: result.sharedGenres
+                      .map((genre) => Chip(
+                            label: Text(genre),
+                            backgroundColor: FlickerColors.surface,
+                            labelStyle: FlickerText.caption,
+                          ))
+                      .toList(),
+                ),
+              ],
+              if (result.sharedMovieTitles.isNotEmpty) ...[
+                const SizedBox(height: 12),
                 Text(
-                  'Shared genres: ${result.sharedGenres.join(', ')}',
+                  'Movies you both watched',
+                  style: FlickerText.label,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  result.sharedMovieTitles.join(', '),
                   style: FlickerText.body,
                 ),
               ],
               if (result.suggestedGenres.isNotEmpty) ...[
-                const SizedBox(height: 6),
+                const SizedBox(height: 12),
                 Text(
-                  'They like: ${result.suggestedGenres.join(', ')}',
+                  'They also like: ${result.suggestedGenres.join(', ')}',
                   style: FlickerText.body,
                 ),
               ],

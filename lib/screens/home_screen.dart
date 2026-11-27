@@ -275,7 +275,18 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context, snapshot) {
           final entries = snapshot.data ?? [];
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(
+              child: CircularProgressIndicator(color: FlickerColors.primaryBright),
+            );
+          }
+          if (snapshot.hasError) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                'Could not load your circle. Pull down to retry.',
+                style: FlickerText.caption,
+              ),
+            );
           }
           if (entries.isEmpty) {
             return const Padding(
@@ -329,7 +340,18 @@ class _HomeScreenState extends State<HomeScreen> {
               .take(10)
               .toList();
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(
+              child: CircularProgressIndicator(color: FlickerColors.primaryBright),
+            );
+          }
+          if (snapshot.hasError) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                'Could not load your library. Pull down to retry.',
+                style: FlickerText.caption,
+              ),
+            );
           }
           if (movies.isEmpty) {
             return const Padding(

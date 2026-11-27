@@ -7,6 +7,7 @@ class UserProfile {
   final String avatarUrl;
   final bool discoverable;
   final bool tasteShared;
+  final int schemaVersion;
 
   const UserProfile({
     required this.uid,
@@ -17,6 +18,7 @@ class UserProfile {
     this.avatarUrl = '',
     this.discoverable = true,
     this.tasteShared = true,
+    this.schemaVersion = 0,
   });
 
   factory UserProfile.fromMap(Map<String, dynamic> map, String documentId) {
@@ -30,6 +32,7 @@ class UserProfile {
       avatarUrl: (map['avatarUrl'] as String?) ?? '',
       discoverable: map['discoverable'] as bool? ?? true,
       tasteShared: map['tasteShared'] as bool? ?? true,
+      schemaVersion: (map['schemaVersion'] as num?)?.toInt() ?? 0,
     );
   }
 

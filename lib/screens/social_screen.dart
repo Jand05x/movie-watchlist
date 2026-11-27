@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../services/user_service.dart';
 import '../theme/brand.dart';
 import 'activity_feed_screen.dart';
 import 'add_friend_screen.dart';
@@ -19,9 +18,9 @@ class _SocialScreenState extends State<SocialScreen>
   late final TabController _tabs = TabController(length: 3, vsync: this);
 
   @override
-  void initState() {
-    super.initState();
-    UserService.ensureProfile().catchError((_) => null);
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
   }
 
   Future<void> _openAddFriend() async {
