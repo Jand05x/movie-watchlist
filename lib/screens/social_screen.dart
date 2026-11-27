@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../services/user_service.dart';
+import '../theme/brand.dart';
 import 'activity_feed_screen.dart';
 import 'add_friend_screen.dart';
 import 'friends_screen.dart';
+import 'inbox_screen.dart';
 
 class SocialScreen extends StatefulWidget {
   const SocialScreen({super.key});
@@ -14,7 +16,7 @@ class SocialScreen extends StatefulWidget {
 
 class _SocialScreenState extends State<SocialScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
+  late final TabController _tabs = TabController(length: 3, vsync: this);
 
   @override
   void initState() {
@@ -27,21 +29,14 @@ class _SocialScreenState extends State<SocialScreen>
       context,
       MaterialPageRoute(builder: (_) => const AddFriendScreen()),
     );
-
     if (added == true && mounted) _tabs.animateTo(0);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF141414),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF141414),
-        title: const Text(
-          'Social',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        iconTheme: const IconThemeData(color: Colors.white),
+        title: const Text('Friends'),
         actions: [
           IconButton(
             tooltip: 'Add friend',
@@ -51,12 +46,13 @@ class _SocialScreenState extends State<SocialScreen>
         ],
         bottom: TabBar(
           controller: _tabs,
-          indicatorColor: const Color(0xFFE50914),
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white60,
+          indicatorColor: FlickerColors.primaryBright,
+          labelColor: FlickerColors.cream,
+          unselectedLabelColor: FlickerColors.muted,
           tabs: const [
-            Tab(icon: Icon(Icons.people_outline), text: 'Friends'),
-            Tab(icon: Icon(Icons.feed_outlined), text: 'Activity'),
+            Tab(text: 'People'),
+            Tab(text: 'Circle'),
+            Tab(text: 'Inbox'),
           ],
         ),
       ),
@@ -65,6 +61,7 @@ class _SocialScreenState extends State<SocialScreen>
         children: const [
           FriendsScreen(embedded: true),
           ActivityFeedScreen(embedded: true),
+          InboxScreen(),
         ],
       ),
     );

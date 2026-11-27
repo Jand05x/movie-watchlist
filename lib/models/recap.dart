@@ -41,16 +41,15 @@ RecapStats computeRecap(List<Review> reviews, DateTime now) {
   final end = DateTime(now.year, now.month + 1);
 
   final watched = reviews.where((review) {
-    final timestamp = review.timestamp;
-    return review.watched &&
-        timestamp != null &&
+    final timestamp = review.effectiveWatchedAt;
+    return timestamp != null &&
         !timestamp.isBefore(start) &&
         timestamp.isBefore(end);
   }).toList();
 
   final days = <DateTime>{};
   for (final review in watched) {
-    final timestamp = review.timestamp!;
+    final timestamp = review.effectiveWatchedAt!;
     days.add(DateTime(timestamp.year, timestamp.month, timestamp.day));
   }
 
@@ -92,7 +91,8 @@ RecapStats computeRecap(List<Review> reviews, DateTime now) {
     if (best == null ||
         rating > (best.rating ?? 0) ||
         (rating == best.rating &&
-            (review.timestamp ?? start).isAfter(best.timestamp ?? start))) {
+            (review.ratedAt ?? review.timestamp ?? start)
+                .isAfter(best.ratedAt ?? best.timestamp ?? start))) {
       best = review;
     }
   }

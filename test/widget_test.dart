@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:movie_watchlist/models/activity_entry.dart';
 import 'package:movie_watchlist/models/friendship.dart';
 import 'package:movie_watchlist/models/review.dart';
 import 'package:movie_watchlist/models/recap.dart';
@@ -89,6 +90,41 @@ void main() {
     expect(stats.highestRating, 5);
     expect(stats.longestStreak, 5);
     expect(stats.badges.map((badge) => badge.unlocked), [true, false, true]);
+  });
+
+  test('watchedAt overrides the mutable update timestamp for recaps', () {
+    final entry = Review(
+      tmdbId: 1,
+      title: 'Movie',
+      posterPath: '',
+      mediaType: 'movie',
+      watched: true,
+      watchedAt: DateTime(2026, 11, 2),
+      timestamp: DateTime(2026, 12, 1),
+    );
+
+    final stats = computeRecap([entry], now);
+    expect(entry.effectiveWatchedAt, DateTime(2026, 11, 2));
+    expect(stats.watchedCount, 1);
+  });
+
+  test('share entries parse recipient and response status', () {
+    final entry = ActivityEntry.fromMap(
+      {
+        'senderUid': 'alice',
+        'recipientUid': 'bob',
+        'kind': 'watch_together',
+        'movieId': 42,
+        'title': 'Movie',
+        'status': 'accepted',
+        'timestamp': '2026-11-27T00:00:00.000Z',
+      },
+      'share-1',
+    );
+
+    expect(entry.recipientUid, 'bob');
+    expect(entry.status, 'accepted');
+    expect(entry.isInvite, isTrue);
   });
 
   test('ten-watched badge unlocks at ten movies', () {

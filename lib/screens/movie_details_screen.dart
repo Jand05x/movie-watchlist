@@ -5,9 +5,11 @@ import '../models/review.dart';
 import '../services/review_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/watchlist_service.dart';
+import '../theme/brand.dart';
 import '../widgets/animated_star_rating.dart';
 import '../widgets/genre_chip.dart';
 import '../widgets/poster_image.dart';
+import 'share_picker_screen.dart';
 
 class MovieDetailsScreen extends StatefulWidget {
   final Map<String, dynamic> movie;
@@ -19,9 +21,6 @@ class MovieDetailsScreen extends StatefulWidget {
 }
 
 class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
-  static const Color _background = Color(0xFF141414);
-  static const Color _red = Color(0xFFE50914);
-
   late Map<String, dynamic> _details;
   bool _loadingDetails = true;
   bool _checking = true;
@@ -29,7 +28,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   bool _added = false;
   bool _watched = false;
   int? _rating;
-  String _visibility = 'public';
+  String _visibility = 'private';
 
   int? get _tmdbId {
     final id = _details['id'] ?? widget.movie['id'];
@@ -81,7 +80,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
         _added = exists;
         _watched = review?.watched ?? false;
         _rating = review?.rating;
-        _visibility = review?.visibility ?? 'public';
+        _visibility = review?.visibility ?? 'private';
         _checking = false;
       });
     } catch (_) {
@@ -111,12 +110,12 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
     setState(() => _saving = true);
 
     try {
-      await ReviewService.saveRating(
+      await ReviewService.setRating(
         _details,
         rating: rating,
         visibility: _visibility,
       );
-      if (mounted) _showMessage('Rating saved to your activity.');
+      if (mounted) _showMessage('Rating saved.');
     } catch (e) {
       if (mounted) _showMessage('Could not save rating: $e');
     } finally {
@@ -128,7 +127,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
     setState(() => _watched = value);
 
     try {
-      await ReviewService.markWatched(
+      await ReviewService.setWatched(
         _details,
         watched: value,
         visibility: _visibility,
@@ -144,25 +143,15 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
     }
   }
 
-  Future<void> _toggleVisibility(bool value) async {
-    final id = _tmdbId;
-    if (id == null) return;
-
-    final next = value ? 'public' : 'private';
-    setState(() => _visibility = next);
-
-    try {
-      await ReviewService.setVisibility(id, visibility: next);
-      if (mounted) {
-        _showMessage(
-          value ? 'Review shared with friends.' : 'Review is now private.',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _visibility = value ? 'private' : 'public');
-        _showMessage('Could not update visibility: $e');
-      }
+  Future<void> _sendToFriends() async {
+    final sent = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SharePickerScreen(movie: _details),
+      ),
+    );
+    if (sent == true && mounted) {
+      _showMessage('Sent to your friends.');
     }
   }
 
@@ -185,7 +174,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
     final vote = movie['vote_average'];
 
     return Scaffold(
-      backgroundColor: _background,
+      backgroundColor: FlickerColors.canvas,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -270,7 +259,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                     const SizedBox(height: 12),
                     const LinearProgressIndicator(
                       minHeight: 2,
-                      color: _red,
+                      color: FlickerColors.primaryBright,
                       backgroundColor: Colors.transparent,
                     ),
                   ],
@@ -305,7 +294,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _red,
+                        backgroundColor: FlickerColors.primaryBright,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 16),
                       ),
@@ -372,8 +361,8 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
             contentPadding: EdgeInsets.zero,
             value: _watched,
             onChanged: _toggleWatched,
-            activeThumbColor: _red,
-            secondary: const Icon(Icons.check_circle_outline, color: _red),
+            activeThumbColor: FlickerColors.primaryBright,
+            secondary: const Icon(Icons.check_circle_outline, color: FlickerColors.primaryBright),
             title: const Text(
               'Mark as watched',
               style: TextStyle(color: Colors.white),
@@ -383,19 +372,18 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
               style: TextStyle(color: Colors.white60, fontSize: 12),
             ),
           ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _visibility == 'public',
-            onChanged: _toggleVisibility,
-            activeThumbColor: _red,
-            secondary: const Icon(Icons.people_outline, color: _red),
-            title: const Text(
-              'Share with friends',
-              style: TextStyle(color: Colors.white),
-            ),
-            subtitle: const Text(
-              'Show this in your friends\' activity feed',
-              style: TextStyle(color: Colors.white60, fontSize: 12),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: FlickerColors.primaryBright,
+                side: const BorderSide(color: FlickerColors.primaryBright),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              onPressed: _sendToFriends,
+              icon: const Icon(Icons.send_outlined),
+              label: const Text('Send to a friend'),
             ),
           ),
           const SizedBox(height: 8),
@@ -403,7 +391,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
             width: double.infinity,
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
-                backgroundColor: _red,
+                backgroundColor: FlickerColors.primaryBright,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
@@ -441,7 +429,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                 Color(0xC4141414),
                 Color(0x99141414),
                 Color(0xEE141414),
-                _background,
+                FlickerColors.canvas,
               ],
               stops: [0.0, 0.4, 0.78, 1.0],
             ),

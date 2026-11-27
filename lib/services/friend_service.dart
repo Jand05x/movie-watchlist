@@ -61,6 +61,13 @@ class FriendService {
     );
   }
 
+  static Future<bool> isFriend(String otherUid) async {
+    if (otherUid == _uid) return false;
+
+    final document = await _collection.doc(friendshipPairId(_uid, otherUid)).get();
+    return document.exists && document.get('status') == 'accepted';
+  }
+
   static Future<void> sendRequest(String friendUid) async {
     if (friendUid == _uid) {
       throw ArgumentError('You cannot add yourself as a friend.');

@@ -2,15 +2,25 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/user_profile.dart';
+import '../models/friendship.dart';
 
 class UserService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
   static final FirebaseAuth _auth = FirebaseAuth.instance;
 
+  static final Map<String, UserProfile> _cache = {};
+
   static CollectionReference<Map<String, dynamic>> get _users =>
       _db.collection('users');
 
-  static String normalize(String value) => value.trim().toLowerCase();
+  static String normalize(String value) {
+    return value.trim().toLowerCase().replaceFirst(RegExp(r'^@'), '');
+  }
+
+  static bool isValidUsername(String value) {
+    final name = normalize(value);
+    return RegExp(r'^[a-z0-9_]{3,20}$').hasMatch(name);
+  }
 
   static Future<bool> isUsernameTaken(String username) async {
     final name = normalize(username);
@@ -27,23 +37,30 @@ class UserService {
     }
 
     final name = normalize(username);
-    if (name.isEmpty) {
-      throw ArgumentError('Choose a username.');
-    }
-    if (await isUsernameTaken(name)) {
-      throw StateError('That username is already taken.');
+    if (!isValidUsername(name)) {
+      throw ArgumentError('Choose a 3-20 character username (letters, numbers, _).');
     }
 
-    final batch = _db.batch();
-    batch.set(_db.collection('usernames').doc(name), {'uid': user.uid});
-    batch.set(_users.doc(user.uid), {
-      'uid': user.uid,
-      'email': normalize(user.email ?? ''),
-      'username': name,
-      'displayName': name,
-      'createdAt': FieldValue.serverTimestamp(),
+    final reservation = _db.collection('usernames').doc(name);
+    await _db.runTransaction((transaction) async {
+      final existing = await transaction.get(reservation);
+      if (existing.exists) {
+        throw StateError('That username is already taken.');
+      }
+
+      transaction.set(reservation, {'uid': user.uid});
+      transaction.set(_users.doc(user.uid), {
+        'uid': user.uid,
+        'email': normalize(user.email ?? ''),
+        'username': name,
+        'displayName': name,
+        'bio': '',
+        'avatarUrl': '',
+        'discoverable': true,
+        'tasteShared': true,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
     });
-    await batch.commit();
   }
 
   static Future<UserProfile?> ensureProfile() async {
@@ -54,13 +71,15 @@ class UserService {
     if (!document.exists) {
       final base = normalize(user.email?.split('@').first ?? 'movie')
           .replaceAll(RegExp(r'[^a-z0-9_]'), '');
-      final root = base.isEmpty ? 'movie' : base;
+      var root = base.length >= 3 ? base.substring(0, 20) : 'movie';
+      if (root.length < 3) root = 'movie';
 
       var candidate = root;
       var suffix = 0;
       while (await isUsernameTaken(candidate)) {
         suffix += 1;
         candidate = '$root$suffix';
+        if (candidate.length > 20) candidate = candidate.substring(0, 20);
       }
       await createProfile(username: candidate);
     }
@@ -69,9 +88,48 @@ class UserService {
   }
 
   static Future<UserProfile?> profile(String uid) async {
+    final cached = _cache[uid];
+    if (cached != null) return cached;
+
     final document = await _users.doc(uid).get();
     if (!document.exists) return null;
-    return UserProfile.fromMap(document.data()!, document.id);
+
+    final result = UserProfile.fromMap(document.data()!, document.id);
+    _cache[uid] = result;
+    return result;
+  }
+
+  static Stream<UserProfile?> profileStream(String uid) {
+    return _users.doc(uid).snapshots().map((snapshot) {
+      if (!snapshot.exists) return null;
+      final result = UserProfile.fromMap(snapshot.data()!, snapshot.id);
+      _cache[uid] = result;
+      return result;
+    });
+  }
+
+  static Future<void> updateProfile({
+    required String displayName,
+    required String bio,
+    required String avatarUrl,
+    required bool discoverable,
+    required bool tasteShared,
+  }) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      throw StateError('You must be logged in to edit your profile.');
+    }
+
+    await _users.doc(uid).set({
+      'displayName': displayName.trim().isEmpty ? 'Movie fan' : displayName.trim(),
+      'bio': bio.trim(),
+      'avatarUrl': avatarUrl.trim(),
+      'discoverable': discoverable,
+      'tasteShared': tasteShared,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    _cache.remove(uid);
   }
 
   static Future<UserProfile?> findByEmail(String email) async {
@@ -89,7 +147,7 @@ class UserService {
   }
 
   static Future<UserProfile?> findByUsername(String username) async {
-    final name = normalize(username).replaceFirst(RegExp(r'^@'), '');
+    final name = normalize(username);
     if (name.isEmpty) return null;
 
     final reservation = await _db.collection('usernames').doc(name).get();
@@ -98,5 +156,69 @@ class UserService {
     final uid = reservation.get('uid') as String?;
     if (uid == null) return null;
     return profile(uid);
+  }
+
+  static Future<List<UserProfile>> search(String query) async {
+    final text = query.trim();
+    if (text.isEmpty) return const [];
+
+    final results = <String, UserProfile>{};
+    if (text.contains('@')) {
+      final byEmail = await findByEmail(text);
+      if (byEmail != null) results[byEmail.uid] = byEmail;
+    }
+
+    final byUsername = await findByUsername(text);
+    if (byUsername != null) results[byUsername.uid] = byUsername;
+
+    final byName = await _users
+        .where('displayName', isEqualTo: text)
+        .limit(5)
+        .get();
+    for (final document in byName.docs) {
+      results[document.id] = UserProfile.fromMap(document.data(), document.id);
+    }
+
+    results.remove(_auth.currentUser?.uid);
+    return results.values.toList();
+  }
+
+  static Future<List<UserProfile>> suggestions() async {
+    final uid = _auth.currentUser?.uid;
+    final snapshot = await _users
+        .where('discoverable', isEqualTo: true)
+        .limit(12)
+        .get();
+
+    return snapshot.docs
+        .map((document) => UserProfile.fromMap(document.data(), document.id))
+        .where((profile) => profile.uid != uid)
+        .toList();
+  }
+
+  static Future<int> mutualFriendCount(String otherUid) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null || uid == otherUid) return 0;
+
+    final snapshot = await _db
+        .collection('friendships')
+        .where('participants', arrayContains: uid)
+        .where('status', isEqualTo: 'accepted')
+        .limit(50)
+        .get();
+
+    var count = 0;
+    for (final document in snapshot.docs) {
+      final friendship = Friendship.fromMap(document.data(), document.id);
+      final candidate = friendship.otherUser(uid);
+      if (candidate == otherUid) continue;
+
+      final pair = _db
+          .collection('friendships')
+          .doc(friendshipPairId(candidate, otherUid));
+      final mutual = await pair.get();
+      if (mutual.exists && mutual.get('status') == 'accepted') count += 1;
+    }
+    return count;
   }
 }

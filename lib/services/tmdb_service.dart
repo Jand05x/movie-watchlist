@@ -62,6 +62,16 @@ class TmdbService {
     }).toList();
   }
 
+  static Future<List<Map<String, dynamic>>> discoverByGenre(int genreId) {
+    return _getResults(
+      '/discover/movie',
+      queryParameters: {
+        'with_genres': genreId.toString(),
+        'sort_by': 'popularity.desc',
+      },
+    );
+  }
+
   static Future<List<Map<String, dynamic>>> searchMovies(String query) {
     return _getResults(
       '/search/movie',

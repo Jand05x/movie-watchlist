@@ -26,7 +26,10 @@ class Review {
   final int? rating;
   final bool watched;
   final String visibility;
+  final DateTime? watchedAt;
+  final DateTime? ratedAt;
   final DateTime? timestamp;
+  final String note;
   final List<MovieGenre> genres;
 
   const Review({
@@ -37,7 +40,10 @@ class Review {
     this.rating,
     this.watched = false,
     this.visibility = 'public',
+    this.watchedAt,
+    this.ratedAt,
     this.timestamp,
+    this.note = '',
     this.genres = const [],
   });
 
@@ -54,7 +60,10 @@ class Review {
       rating: rawRating is num ? rawRating.round() : null,
       watched: map['watched'] as bool? ?? rawRating != null,
       visibility: (map['visibility'] as String?) ?? 'public',
-      timestamp: parseDate(map['timestamp'] ?? map['watchedAt']),
+      watchedAt: parseDate(map['watchedAt']),
+      ratedAt: parseDate(map['ratedAt']),
+      timestamp: parseDate(map['timestamp'] ?? map['updatedAt']),
+      note: (map['note'] as String?) ?? '',
       genres: rawGenres is List
           ? rawGenres
               .whereType<Map<String, dynamic>>()
@@ -63,4 +72,17 @@ class Review {
           : const [],
     );
   }
+
+  DateTime? get effectiveWatchedAt {
+    if (!watched) return null;
+    return watchedAt ?? timestamp;
+  }
+
+  Map<String, dynamic> get movieSnapshot => {
+        'id': tmdbId,
+        'title': title,
+        'poster_path': posterPath,
+        'media_type': mediaType,
+        'vote_average': rating ?? 0,
+      };
 }

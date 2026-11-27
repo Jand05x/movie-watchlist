@@ -1,5 +1,5 @@
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 
 import 'user_service.dart';
 
@@ -10,7 +10,11 @@ class AuthService extends ChangeNotifier {
 
   Future<String?> signIn(String email, String password) async {
     try {
-      await _auth.signInWithEmailAndPassword(email: email, password: password);
+      await _auth.signInWithEmailAndPassword(
+        email: email.trim(),
+        password: password,
+      );
+      await UserService.ensureProfile();
       return null;
     } on FirebaseAuthException catch (e) {
       return e.message;
@@ -22,22 +26,28 @@ class AuthService extends ChangeNotifier {
     String password,
     String username,
   ) async {
-    try {
-      if (UserService.normalize(username).isEmpty) {
-        return 'Choose a username.';
-      }
-      if (await UserService.isUsernameTaken(username)) {
-        return 'That username is already taken.';
-      }
+    if (!UserService.isValidUsername(username)) {
+      return 'Usernames must be 3-20 characters: letters, numbers, or _.';
+    }
 
-      await _auth.createUserWithEmailAndPassword(
-        email: email,
+    UserCredential? credential;
+    try {
+      credential = await _auth.createUserWithEmailAndPassword(
+        email: email.trim(),
         password: password,
       );
       await UserService.createProfile(username: username);
+      await UserService.ensureProfile();
       return null;
     } on FirebaseAuthException catch (e) {
       return e.message;
+    } on StateError catch (e) {
+      if (e.message == 'That username is already taken.') {
+        await credential?.user?.delete();
+      }
+      return e.message;
+    } catch (e) {
+      return e.toString();
     }
   }
 

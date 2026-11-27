@@ -2,7 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/review.dart';
-import 'activity_service.dart';
+import 'taste_service.dart';
 import 'watchlist_service.dart';
 
 class ReviewService {
@@ -56,107 +56,150 @@ class ReviewService {
     };
   }
 
+  static Stream<Review?> forMovieStream(int tmdbId) {
+    return _reviews.doc(tmdbId.toString()).snapshots().map((snapshot) {
+      return snapshot.exists ? Review.fromMap(snapshot.data()!) : null;
+    });
+  }
+
   static Future<Review?> forMovie(int tmdbId) async {
     final document = await _reviews.doc(tmdbId.toString()).get();
     if (!document.exists) return null;
     return Review.fromMap(document.data()!);
   }
 
-  static Future<void> markWatched(
+  static Future<List<Review>> allReviews() async {
+    final snapshot = await _reviews.limit(500).get();
+    return snapshot.docs.map((document) {
+      return Review.fromMap(document.data());
+    }).toList();
+  }
+
+  static Future<void> setWatched(
     Map<String, dynamic> movie, {
     required bool watched,
     required String visibility,
   }) async {
     final id = _id(movie);
-    final document = await _reviews.doc(id.toString()).get();
-    final wasWatched = document.exists && document.get('watched') == true;
+    final document = _reviews.doc(id.toString());
+    final existing = await document.get();
+    final current = existing.exists ? Review.fromMap(existing.data()!) : null;
 
-    await _reviews.doc(id.toString()).set({
+    if (current != null &&
+        current.watched == watched &&
+        current.visibility == visibility) {
+      return;
+    }
+
+    final data = <String, dynamic>{
       ..._movieData(movie),
       'watched': watched,
       'visibility': visibility,
-      'timestamp': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+      'timestamp': FieldValue.serverTimestamp(),
+    };
 
+    if (watched) {
+      data['watchedAt'] = current?.watchedAt != null
+          ? Timestamp.fromDate(current!.watchedAt!)
+          : FieldValue.serverTimestamp();
+    } else {
+      data['watchedAt'] = FieldValue.delete();
+    }
+
+    await document.set(data, SetOptions(merge: true));
     await WatchlistService.setReviewFlags(
       id,
       watched: watched,
       visibility: visibility,
     );
-
-    if (watched && !wasWatched) {
-      await ActivityService.record(
-        type: 'watched',
-        movieId: id,
-        movie: movie,
-        visibility: visibility,
-      );
-    }
+    TasteService.recompute();
   }
 
-  static Future<void> saveRating(
+  static Future<void> setRating(
     Map<String, dynamic> movie, {
     required int rating,
     required String visibility,
+    String? note,
   }) async {
-    final id = _id(movie);
+    if (rating < 1 || rating > 5) {
+      throw ArgumentError('Rating must be between 1 and 5.');
+    }
 
-    await _reviews.doc(id.toString()).set({
+    final id = _id(movie);
+    final document = _reviews.doc(id.toString());
+    final existing = await document.get();
+    final current = existing.exists ? Review.fromMap(existing.data()!) : null;
+
+    if (current != null &&
+        current.rating == rating &&
+        current.visibility == visibility &&
+        (note == null || current.note == note)) {
+      return;
+    }
+
+    final data = <String, dynamic>{
       ..._movieData(movie),
       'watched': true,
       'rating': rating,
       'visibility': visibility,
-      'timestamp': FieldValue.serverTimestamp(),
+      'ratedAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+      'timestamp': FieldValue.serverTimestamp(),
+      'watchedAt': current?.watchedAt != null
+          ? Timestamp.fromDate(current!.watchedAt!)
+          : FieldValue.serverTimestamp(),
+    };
+    if (note != null) data['note'] = note;
 
+    await document.set(data, SetOptions(merge: true));
     await WatchlistService.setReviewFlags(
       id,
       watched: true,
       rating: rating,
       visibility: visibility,
     );
-
-    await ActivityService.record(
-      type: 'rated',
-      movieId: id,
-      movie: movie,
-      rating: rating.toDouble(),
-      visibility: visibility,
-    );
+    TasteService.recompute();
   }
 
   static Future<void> setVisibility(
     int tmdbId, {
     required String visibility,
   }) async {
-    await _reviews.doc(tmdbId.toString()).set({
-      'visibility': visibility,
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final document = _reviews.doc(tmdbId.toString());
+    final snapshot = await document.get();
+    final watched = snapshot.exists && snapshot.get('watched') == true;
+
+    if (snapshot.exists) {
+      await document.set({
+        'visibility': visibility,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
 
     await WatchlistService.setReviewFlags(
       tmdbId,
-      watched: true,
+      watched: watched,
       visibility: visibility,
     );
+  }
 
-    final snapshot = await _db
-        .collection('activity')
-        .where('userId', isEqualTo: _uid)
-        .where('movieId', isEqualTo: tmdbId)
-        .get();
-
-    final batch = _db.batch();
-    for (final document in snapshot.docs) {
-      batch.update(document.reference, {'visibility': visibility});
-    }
-    await batch.commit();
+  static Future<void> setNote(int tmdbId, String note) async {
+    await _reviews.doc(tmdbId.toString()).set({
+      'note': note,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   static Future<List<Review>> inMonth(DateTime start, DateTime end) async {
-    final snapshot = await _reviews
+    final byWatchedAt = await _reviews
+        .where(
+          'watchedAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(start),
+        )
+        .where('watchedAt', isLessThan: Timestamp.fromDate(end))
+        .get();
+    final byTimestamp = await _reviews
         .where(
           'timestamp',
           isGreaterThanOrEqualTo: Timestamp.fromDate(start),
@@ -164,8 +207,10 @@ class ReviewService {
         .where('timestamp', isLessThan: Timestamp.fromDate(end))
         .get();
 
-    return snapshot.docs.map((document) {
-      return Review.fromMap(document.data());
-    }).toList();
+    final merged = <String, Review>{};
+    for (final document in [...byWatchedAt.docs, ...byTimestamp.docs]) {
+      merged[document.id] = Review.fromMap(document.data());
+    }
+    return merged.values.toList();
   }
 }
