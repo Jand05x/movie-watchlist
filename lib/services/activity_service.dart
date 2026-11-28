@@ -1,11 +1,9 @@
-import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/activity_entry.dart';
+import '../utils/activity_notes.dart';
 import 'friend_service.dart';
-import 'user_service.dart';
 
 class ActivityService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -20,6 +18,9 @@ class ActivityService {
 
   static CollectionReference<Map<String, dynamic>> get _shares =>
       _db.collection('shares');
+
+  static CollectionReference<Map<String, dynamic>> get _activities =>
+      _db.collection('activities');
 
   static CollectionReference<Map<String, dynamic>> _feed(String uid) =>
       _db.collection('users').doc(uid).collection('feed');
@@ -42,6 +43,21 @@ class ActivityService {
     };
   }
 
+  static Map<String, dynamic> _feedStub(
+    String activityId,
+    String viewerUid, {
+    required String actorUid,
+    required String status,
+  }) {
+    return {
+      'activityId': activityId,
+      'viewerUid': viewerUid,
+      'actorUid': actorUid,
+      'status': status,
+      'timestamp': FieldValue.serverTimestamp(),
+    };
+  }
+
   static Future<void> share(
     Map<String, dynamic> movie, {
     required String friendUid,
@@ -55,12 +71,17 @@ class ActivityService {
     final data = _movieData(movie);
     final shareId = _shares.doc().id;
     final isInvite = kind == 'watch_together';
+    final type = isInvite ? 'watch_invite' : 'shared_movie';
+    final participants = _participants(friendUid);
     final payload = <String, dynamic>{
       ...data,
-      'senderUid': _uid,
-      'recipientUid': friendUid,
-      'participants': _participants(friendUid),
+      'activityId': shareId,
+      'type': type,
       'kind': kind,
+      'senderUid': _uid,
+      'actorUid': _uid,
+      'recipientUid': friendUid,
+      'participants': participants,
       'note': note.trim(),
       'message': note.trim(),
       'status': 'sent',
@@ -70,7 +91,19 @@ class ActivityService {
 
     final batch = _db.batch();
     batch.set(_shares.doc(shareId), payload);
-    batch.set(_feed(friendUid).doc(shareId), payload);
+    batch.set(_activities.doc(shareId), payload);
+    batch.set(_feed(friendUid).doc(shareId), _feedStub(
+      shareId,
+      friendUid,
+      actorUid: _uid,
+      status: 'sent',
+    ));
+    batch.set(_feed(_uid).doc(shareId), _feedStub(
+      shareId,
+      _uid,
+      actorUid: _uid,
+      status: 'sent',
+    ));
     batch.set(
       _db.collection('users').doc(friendUid).collection('notifications').doc(shareId),
       {
@@ -112,22 +145,78 @@ class ActivityService {
     return sent;
   }
 
+  static Future<void> postToFriends(
+    String type,
+    Map<String, dynamic> movie, {
+    String note = '',
+    double? rating,
+    String sourceId = '',
+  }) async {
+    final friends = await FriendService.acceptedFriendIds().first;
+    if (friends.isEmpty) return;
+
+    final activityId = _activities.doc().id;
+    final participants = <String>{_uid, ...friends}.toList()..sort();
+    final data = _movieData(movie);
+    final payload = <String, dynamic>{
+      ...data,
+      'activityId': activityId,
+      'type': type,
+      'kind': type,
+      'senderUid': _uid,
+      'actorUid': _uid,
+      'participants': participants,
+      'note': note.trim(),
+      'status': 'sent',
+      'timestamp': FieldValue.serverTimestamp(),
+      'reactions': <String, String>{},
+      'sourceId': sourceId,
+      'rating': ?rating,
+    };
+
+    final batch = _db.batch();
+    batch.set(_activities.doc(activityId), payload);
+    for (final viewerUid in participants) {
+      batch.set(
+        _feed(viewerUid).doc(activityId),
+        _feedStub(
+          activityId,
+          viewerUid,
+          actorUid: _uid,
+          status: 'sent',
+        ),
+      );
+    }
+    await batch.commit();
+  }
+
   static Stream<List<ActivityEntry>> feed() {
     return _feed(_uid)
         .orderBy('timestamp', descending: true)
         .limit(100)
         .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
-              .where((document) => document.get('status') != 'declined')
-              .map(
-                (document) => ActivityEntry.fromMap(
-                  document.data(),
-                  document.id,
-                ),
-              )
-              .toList(),
-        );
+        .asyncMap((snapshot) async {
+      final refs = snapshot.docs
+          .map((document) {
+            final activityId =
+                (document.get('activityId') as String?) ?? document.id;
+            return _activities.doc(activityId);
+          })
+          .toList();
+      final sources = await Future.wait(refs.map((ref) => ref.get()));
+
+      final entries = <ActivityEntry>[];
+      for (var index = 0; index < snapshot.docs.length; index++) {
+        final document = snapshot.docs[index];
+        final source = sources[index];
+        if (source.exists) {
+          entries.add(ActivityEntry.fromMap(source.data()!, source.id));
+        } else {
+          entries.add(ActivityEntry.fromMap(document.data(), document.id));
+        }
+      }
+      return entries.where((entry) => entry.status != 'declined').toList();
+    });
   }
 
   static Stream<List<ActivityEntry>> inbox() {
@@ -146,6 +235,10 @@ class ActivityService {
               )
               .toList(),
         );
+  }
+
+  static Stream<List<ActivityEntry>> notesFromFriends() {
+    return inbox().map((entries) => filterNotesWithText(entries));
   }
 
   static Stream<List<ActivityEntry>> sent() {
@@ -174,75 +267,4 @@ class ActivityService {
     return ActivityEntry.fromMap(document.data()!, document.id);
   }
 
-  static Future<void> respond(String shareId, bool accepted) async {
-    final document = _shares.doc(shareId);
-    final snapshot = await document.get(const GetOptions(source: Source.server));
-    if (!snapshot.exists) return;
-
-    final data = snapshot.data()!;
-    if (data['recipientUid'] != _uid) {
-      throw StateError('Only the recipient can respond to a share.');
-    }
-    if (data['status'] != 'sent') {
-      throw StateError('You have already responded to this share.');
-    }
-
-    final senderUid = (data['senderUid'] as String?) ?? '';
-    final title = (data['title'] as String?) ?? 'this movie';
-    final status = accepted ? 'accepted' : 'declined';
-    final isInvite = data['kind'] == 'watch_together';
-    final profile = await UserService.profile(_uid);
-    final name = profile?.displayName ?? profile?.label ?? 'Your friend';
-
-    final batch = _db.batch();
-    batch.update(document, {
-      'status': status,
-      'respondedAt': FieldValue.serverTimestamp(),
-    });
-    batch.set(_feed(_uid).doc(shareId), {'status': status}, SetOptions(merge: true));
-    batch.set(
-      _db.collection('users').doc(_uid).collection('notifications').doc(shareId),
-      {'read': true},
-      SetOptions(merge: true),
-    );
-    batch.set(
-      _db
-          .collection('users')
-          .doc(senderUid)
-          .collection('notifications')
-          .doc('${shareId}_response'),
-      {
-        'type': isInvite ? 'watch_reply' : 'share_reply',
-        'title': isInvite ? 'Watch night set' : 'Share reply',
-        'body': accepted ? '$name said yes to $title' : '$name passed on $title',
-        'actorUid': _uid,
-        'shareId': shareId,
-        'read': false,
-        'timestamp': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
-    await batch.commit();
-  }
-
-  static Future<void> react(String shareId, String emoji) async {
-    final document = _shares.doc(shareId);
-    final snapshot = await document.get(const GetOptions(source: Source.server));
-    if (!snapshot.exists) return;
-    if (snapshot.get('recipientUid') != _uid) {
-      throw StateError('Only the recipient can react to a share.');
-    }
-
-    final reactions = Map<String, dynamic>.from(
-      snapshot.get('reactions') as Map? ?? const {},
-    );
-    reactions[_uid] = emoji;
-
-    final batch = _db.batch();
-    batch.set(document, {'reactions': reactions}, SetOptions(merge: true));
-    batch.set(_feed(_uid).doc(shareId), {
-      'reactions': reactions,
-    }, SetOptions(merge: true));
-    await batch.commit();
-  }
 }

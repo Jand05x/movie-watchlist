@@ -13,7 +13,9 @@ import '../widgets/poster_image.dart';
 import 'movie_details_screen.dart';
 
 class InboxScreen extends StatefulWidget {
-  const InboxScreen({super.key});
+  final bool embedded;
+
+  const InboxScreen({super.key, this.embedded = false});
 
   @override
   State<InboxScreen> createState() => _InboxScreenState();
@@ -22,7 +24,6 @@ class InboxScreen extends StatefulWidget {
 class _InboxScreenState extends State<InboxScreen> {
   int _tab = 0;
   int _refreshKey = 0;
-  String? _busyId;
 
   void _retry() {
     if (mounted) setState(() => _refreshKey++);
@@ -30,7 +31,7 @@ class _InboxScreenState extends State<InboxScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final body = Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -69,6 +70,12 @@ class _InboxScreenState extends State<InboxScreen> {
           ),
         ),
       ],
+    );
+
+    if (widget.embedded) return body;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Inbox')),
+      body: body,
     );
   }
 
@@ -113,7 +120,6 @@ class _InboxScreenState extends State<InboxScreen> {
     final uid = received ? entry.senderUid : entry.recipientUid;
     final note = entry.note.isEmpty ? null : '“${entry.note}”';
     final status = _statusLabel(entry.status);
-    final busy = _busyId == entry.id;
 
     return Card(
       color: FlickerColors.surface,
@@ -210,35 +216,6 @@ class _InboxScreenState extends State<InboxScreen> {
                 style: FlickerText.caption,
               ),
             ],
-            if (received && entry.status == 'sent') ...[
-              const SizedBox(height: 12),
-              Wrap(
-                alignment: WrapAlignment.end,
-                spacing: 8,
-                children: [
-                  OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: FlickerColors.muted,
-                      side: const BorderSide(color: FlickerColors.muted),
-                    ),
-                    onPressed: busy ? null : () => _respond(entry, false),
-                    child: const Text('Not for me'),
-                  ),
-                  FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: FlickerColors.primaryBright,
-                      foregroundColor: Colors.white,
-                    ),
-                    onPressed: busy ? null : () => _respond(entry, true),
-                    child: Text(entry.isInvite ? 'Count me in' : 'Thanks!'),
-                  ),
-                ],
-              ),
-            ],
-            if (busy) ...[
-              const SizedBox(height: 8),
-              const LinearProgressIndicator(minHeight: 2),
-            ],
           ],
         ),
       ),
@@ -253,30 +230,6 @@ class _InboxScreenState extends State<InboxScreen> {
         return 'Declined';
       default:
         return 'New';
-    }
-  }
-
-  Future<void> _respond(ActivityEntry entry, bool accepted) async {
-    setState(() => _busyId = entry.id);
-    try {
-      await ActivityService.respond(entry.id, accepted);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            accepted
-                ? 'Added to your feed.'
-                : 'We let your friend know.',
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not respond: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _busyId = null);
     }
   }
 

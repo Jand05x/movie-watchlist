@@ -36,7 +36,7 @@ class MovieCard extends StatelessWidget {
                 PosterImage(
                   path: movie['poster_path'] as String?,
                   width: width,
-                  height: width * 1.45,
+                  height: width * 1.3,
                   radius: 10,
                   heroTag: heroTag,
                 ),

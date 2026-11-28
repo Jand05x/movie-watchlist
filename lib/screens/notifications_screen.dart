@@ -56,6 +56,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       return;
     }
 
+    final pollId = item['pollId'] as String?;
+    final listId = item['listId'] as String?;
+    if ((pollId != null && pollId.isNotEmpty) ||
+        (listId != null && listId.isNotEmpty)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('That feature is no longer available.')),
+        );
+      }
+      return;
+    }
+
     final shareId = item['shareId'] as String?;
     if (shareId != null && shareId.isNotEmpty) {
       try {
@@ -152,14 +164,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     horizontal: 12,
                     vertical: 8,
                   ),
-                  leading: Icon(
-                    isInvite
-                        ? Icons.local_fire_department_outlined
-                        : item['type'] == 'friend_request'
-                        ? Icons.person_add_alt_1_outlined
-                        : Icons.notifications_none,
-                    color: FlickerColors.primaryBright,
-                  ),
+                    leading: Icon(
+                      isInvite
+                          ? Icons.local_fire_department_outlined
+                          : item['type'] == 'friend_request'
+                          ? Icons.person_add_alt_1_outlined
+                          : Icons.notifications_none,
+                      color: FlickerColors.primaryBright,
+                    ),
                   title: Text(
                     (item['title'] as String?) ?? 'Update',
                     style: FlickerText.body.copyWith(

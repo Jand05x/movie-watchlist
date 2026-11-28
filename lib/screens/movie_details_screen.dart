@@ -32,6 +32,8 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   bool _added = false;
   bool _watched = false;
   int? _rating;
+  final TextEditingController _noteController = TextEditingController();
+  bool _noteDirty = false;
   String _visibility = 'private';
   StreamSubscription<Map<String, dynamic>?>? _watchlistSub;
   StreamSubscription<Review?>? _reviewSub;
@@ -55,6 +57,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   void dispose() {
     _watchlistSub?.cancel();
     _reviewSub?.cancel();
+    _noteController.dispose();
     super.dispose();
   }
 
@@ -108,6 +111,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
         _watched = review?.watched ?? false;
         _rating = review?.rating;
         if (review != null) _visibility = review.visibility;
+        if (!_noteDirty) _noteController.text = review?.note ?? '';
         _checking = false;
       });
     }, onError: (_) {
@@ -149,6 +153,24 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
       if (mounted) _showMessage('Rating saved.');
     } catch (e) {
       if (mounted) _showMessage('Could not save rating: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _saveNote() async {
+    if (!_ready || _saving) return;
+
+    setState(() => _saving = true);
+
+    try {
+      await ReviewService.setNote(_details, _noteController.text);
+      if (mounted) {
+        setState(() => _noteDirty = false);
+        _showMessage('Note saved privately.');
+      }
+    } catch (e) {
+      if (mounted) _showMessage('Could not save note: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -390,6 +412,29 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
             style: TextStyle(color: Colors.white60, fontSize: 12),
           ),
           const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _visibility == 'public',
+            onChanged: _ready && !_saving
+                ? (value) => setState(
+                    () => _visibility = value ? 'public' : 'private',
+                  )
+                : null,
+            activeThumbColor: FlickerColors.primaryBright,
+            secondary: const Icon(
+              Icons.people_outline,
+              color: FlickerColors.primaryBright,
+            ),
+            title: const Text(
+              'Share activity with friends',
+              style: TextStyle(color: FlickerColors.cream),
+            ),
+            subtitle: const Text(
+              'Watches and ratings appear on their home feed',
+              style: TextStyle(color: FlickerColors.muted, fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 4),
           AnimatedStarRating(
             rating: _rating ?? 0,
             onChanged: _ready && !_saving
@@ -415,6 +460,33 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
             subtitle: const Text(
               'Counts toward your monthly recap',
               style: TextStyle(color: Colors.white60, fontSize: 12),
+            ),
+          ),
+          const Divider(height: 26, color: Colors.white12),
+          TextField(
+            controller: _noteController,
+            enabled: _ready && !_saving,
+            maxLines: 3,
+            style: const TextStyle(color: Colors.white),
+            onChanged: (_) => setState(() => _noteDirty = true),
+            decoration: const InputDecoration(
+              labelText: 'Your note',
+              hintText: 'What did you think?',
+              helperText: 'Private to you',
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: FlickerColors.primaryBright,
+                side: const BorderSide(color: FlickerColors.primaryBright),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              onPressed: _noteDirty && _ready && !_saving ? _saveNote : null,
+              icon: const Icon(Icons.note_outlined),
+              label: const Text('Save note'),
             ),
           ),
           const SizedBox(height: 8),

@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/user_profile.dart';
 import '../models/friendship.dart';
+import 'friend_service.dart';
 
 class UserService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -18,6 +19,12 @@ class UserService {
   }
 
   static void clearCache() => _cache.clear();
+
+  static Future<bool> canDiscover(UserProfile profile) async {
+    if (profile.uid == _auth.currentUser?.uid) return true;
+    if (profile.discoverable) return true;
+    return FriendService.isFriend(profile.uid);
+  }
 
   static bool usernameMatchesProfile(String requested, UserProfile profile) {
     return normalize(requested) == normalize(profile.username);
@@ -85,8 +92,14 @@ class UserService {
       var suffix = 0;
       while (await isUsernameTaken(candidate)) {
         suffix += 1;
-        candidate = '$root$suffix';
-        if (candidate.length > 20) candidate = candidate.substring(0, 20);
+        final suffixText = suffix.toString();
+        candidate = suffixText.length >= 20
+            ? suffixText.substring(0, 20)
+            : '$root$suffixText';
+        if (candidate.length > 20) {
+          candidate =
+              '${root.substring(0, 20 - suffixText.length)}$suffixText';
+        }
       }
       await createProfile(username: candidate);
     }
@@ -151,41 +164,50 @@ class UserService {
 
     final snapshot = await _users
         .where('email', isEqualTo: address)
+        .where('discoverable', isEqualTo: true)
         .limit(1)
         .get(const GetOptions(source: Source.server));
     if (snapshot.docs.isEmpty) return null;
 
     final document = snapshot.docs.first;
-    return UserProfile.fromMap(document.data(), document.id);
+    final profile = UserProfile.fromMap(document.data(), document.id);
+    return await canDiscover(profile) ? profile : null;
   }
 
   static Future<UserProfile?> findByUsername(String username) async {
     final name = normalize(username);
     if (name.isEmpty) return null;
 
-    final reservation = await _db
-        .collection('usernames')
-        .doc(name)
-        .get(const GetOptions(source: Source.server));
-    if (reservation.exists) {
-      final uid = reservation.get('uid') as String?;
-      if (uid != null) {
-        final profile = await fetchProfile(uid);
-        if (profile != null && usernameMatchesProfile(name, profile)) {
-          return profile;
+    try {
+      final reservation = await _db
+          .collection('usernames')
+          .doc(name)
+          .get(const GetOptions(source: Source.server));
+      if (reservation.exists) {
+        final uid = reservation.get('uid') as String?;
+        if (uid != null) {
+          final profile = await fetchProfile(uid);
+          if (profile != null &&
+              usernameMatchesProfile(name, profile) &&
+              await canDiscover(profile)) {
+            return profile;
+          }
         }
       }
-    }
+    } catch (_) {}
 
     final byProfile = await _users
         .where('username', isEqualTo: name)
+        .where('discoverable', isEqualTo: true)
         .limit(1)
         .get(const GetOptions(source: Source.server));
     if (byProfile.docs.isEmpty) return null;
 
     final document = byProfile.docs.first;
     final profile = UserProfile.fromMap(document.data(), document.id);
-    return usernameMatchesProfile(name, profile) ? profile : null;
+    return usernameMatchesProfile(name, profile) && await canDiscover(profile)
+        ? profile
+        : null;
   }
 
   static Future<List<UserProfile>> search(String query) async {
@@ -203,6 +225,7 @@ class UserService {
 
     final byName = await _users
         .where('displayName', isEqualTo: text)
+        .where('discoverable', isEqualTo: true)
         .limit(5)
         .get();
     for (final document in byName.docs) {
@@ -210,7 +233,11 @@ class UserService {
     }
 
     results.remove(_auth.currentUser?.uid);
-    return results.values.toList();
+    final visible = <String, UserProfile>{};
+    for (final entry in results.entries) {
+      if (await canDiscover(entry.value)) visible[entry.key] = entry.value;
+    }
+    return visible.values.toList();
   }
 
   static Future<List<UserProfile>> suggestions() async {

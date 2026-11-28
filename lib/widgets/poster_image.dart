@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../services/tmdb_service.dart';
+import '../theme/brand.dart';
 
 class PosterImage extends StatelessWidget {
   final String? path;
@@ -46,10 +47,29 @@ class PosterImage extends StatelessWidget {
   }
 
   Widget _placeholder() {
-    return Container(
-      color: const Color(0xFF252525),
-      alignment: Alignment.center,
-      child: const Icon(Icons.movie_outlined, color: Colors.white38, size: 34),
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [FlickerColors.surfaceRaised, FlickerColors.canvas],
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.movie_outlined, color: FlickerColors.muted, size: 28),
+            const SizedBox(height: 6),
+            const Text(
+              'NO ARTWORK',
+              style: FlickerText.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

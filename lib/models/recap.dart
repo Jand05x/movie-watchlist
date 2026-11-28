@@ -22,6 +22,15 @@ class RecapStats {
   final String? topGenre;
   final String? highestRatedTitle;
   final double? highestRating;
+  final Review? highestRatedMovie;
+  final int ratedCount;
+  final double? averageRating;
+  final int distinctGenreCount;
+  final List<MapEntry<String, int>> topGenres;
+  final int noteCount;
+  final String? mostActiveDayLabel;
+  final int mostActiveDayCount;
+  final List<Review> watchedMovies;
   final List<RecapBadge> badges;
 
   const RecapStats({
@@ -32,6 +41,15 @@ class RecapStats {
     required this.topGenre,
     required this.highestRatedTitle,
     required this.highestRating,
+    required this.highestRatedMovie,
+    required this.ratedCount,
+    required this.averageRating,
+    required this.distinctGenreCount,
+    required this.topGenres,
+    required this.noteCount,
+    required this.mostActiveDayLabel,
+    required this.mostActiveDayCount,
+    required this.watchedMovies,
     required this.badges,
   });
 }
@@ -47,13 +65,14 @@ RecapStats computeRecap(List<Review> reviews, DateTime now) {
         timestamp.isBefore(end);
   }).toList();
 
-  final days = <DateTime>{};
+  final dayCounts = <DateTime, int>{};
   for (final review in watched) {
     final timestamp = review.effectiveWatchedAt!;
-    days.add(DateTime(timestamp.year, timestamp.month, timestamp.day));
+    final day = DateTime(timestamp.year, timestamp.month, timestamp.day);
+    dayCounts[day] = (dayCounts[day] ?? 0) + 1;
   }
 
-  final sortedDays = days.toList()..sort();
+  final sortedDays = dayCounts.keys.toList()..sort();
   var streak = 0;
   var longestStreak = 0;
   for (var index = 0; index < sortedDays.length; index++) {
@@ -66,6 +85,16 @@ RecapStats computeRecap(List<Review> reviews, DateTime now) {
     if (streak > longestStreak) longestStreak = streak;
   }
 
+  final mostActiveDay = dayCounts.entries.isEmpty
+      ? null
+      : (List<MapEntry<DateTime, int>>.from(dayCounts.entries)
+            ..sort(
+              (a, b) => b.value == a.value
+                  ? a.key.compareTo(b.key)
+                  : b.value.compareTo(a.value),
+            ))
+          .first;
+
   final genreCounts = <String, int>{};
   for (final review in watched) {
     for (final genre in review.genres) {
@@ -73,16 +102,13 @@ RecapStats computeRecap(List<Review> reviews, DateTime now) {
       genreCounts[genre.name] = (genreCounts[genre.name] ?? 0) + 1;
     }
   }
-  final topGenre = genreCounts.entries.isEmpty
-      ? null
-      : (List<MapEntry<String, int>>.from(genreCounts.entries)
-            ..sort(
-              (a, b) => b.value == a.value
-                  ? a.key.compareTo(b.key)
-                  : b.value.compareTo(a.value),
-            ))
-          .first
-          .key;
+  final sortedGenres = List<MapEntry<String, int>>.from(genreCounts.entries)
+    ..sort(
+      (a, b) => b.value == a.value
+          ? a.key.compareTo(b.key)
+          : b.value.compareTo(a.value),
+    );
+  final topGenre = sortedGenres.isEmpty ? null : sortedGenres.first.key;
 
   Review? best;
   for (final review in watched) {
@@ -97,6 +123,24 @@ RecapStats computeRecap(List<Review> reviews, DateTime now) {
     }
   }
 
+  final ratings = watched
+      .where((review) => review.rating != null)
+      .map((review) => review.rating!)
+      .toList();
+  final averageRating = ratings.isEmpty
+      ? null
+      : ratings.reduce((a, b) => a + b) / ratings.length;
+  final noteCount = watched
+      .where((review) => review.note.trim().isNotEmpty)
+      .length;
+
+  final movies = List<Review>.from(watched)
+    ..sort((a, b) {
+      final left = a.effectiveWatchedAt ?? start;
+      final right = b.effectiveWatchedAt ?? start;
+      return right.compareTo(left);
+    });
+
   final count = watched.length;
   return RecapStats(
     monthStart: start,
@@ -106,6 +150,17 @@ RecapStats computeRecap(List<Review> reviews, DateTime now) {
     topGenre: topGenre,
     highestRatedTitle: best?.title,
     highestRating: best?.rating?.toDouble(),
+    highestRatedMovie: best,
+    ratedCount: ratings.length,
+    averageRating: averageRating,
+    distinctGenreCount: sortedGenres.length,
+    topGenres: sortedGenres.take(5).toList(),
+    noteCount: noteCount,
+    mostActiveDayLabel: mostActiveDay == null
+        ? null
+        : '${mostActiveDay.key.month}/${mostActiveDay.key.day}',
+    mostActiveDayCount: mostActiveDay?.value ?? 0,
+    watchedMovies: movies,
     badges: [
       RecapBadge(
         id: 'first_watched',
@@ -124,6 +179,36 @@ RecapStats computeRecap(List<Review> reviews, DateTime now) {
         title: 'On a Roll',
         description: 'Watch on 5 days in a row',
         unlocked: longestStreak >= 5,
+      ),
+      RecapBadge(
+        id: 'first_rating',
+        title: 'First Take',
+        description: 'Rate a movie this month',
+        unlocked: ratings.isNotEmpty,
+      ),
+      RecapBadge(
+        id: 'five_star',
+        title: 'Five Star',
+        description: 'Give a movie five stars',
+        unlocked: ratings.any((rating) => rating == 5),
+      ),
+      RecapBadge(
+        id: 'genre_explorer',
+        title: 'Genre Explorer',
+        description: 'Watch three different genres',
+        unlocked: sortedGenres.length >= 3,
+      ),
+      RecapBadge(
+        id: 'weekend_regular',
+        title: 'Movie Habit',
+        description: 'Watch on four different days',
+        unlocked: sortedDays.length >= 4,
+      ),
+      RecapBadge(
+        id: 'note_keeper',
+        title: 'Note Keeper',
+        description: 'Write a note on a watched movie',
+        unlocked: noteCount >= 1,
       ),
     ],
   );

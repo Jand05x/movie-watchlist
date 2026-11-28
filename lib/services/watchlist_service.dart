@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/model_helpers.dart';
+import 'activity_service.dart';
 
 class WatchlistService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -74,10 +75,20 @@ class WatchlistService {
         if (parseDate(data['added_at']) == null)
           'added_at': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      if (visibility == 'public') {
+        try {
+          await ActivityService.postToFriends('watchlist_add', movie, sourceId: id.toString());
+        } catch (_) {}
+      }
       return;
     }
 
     await document.set(payload);
+    if (visibility == 'public') {
+      try {
+        await ActivityService.postToFriends('watchlist_add', movie, sourceId: id.toString());
+      } catch (_) {}
+    }
   }
 
   static Future<void> restore(Map<String, dynamic> entry) async {
@@ -148,5 +159,15 @@ class WatchlistService {
     if (rating != null) data['rating'] = rating;
 
     await document.set(data, SetOptions(merge: true));
+    if (visibility == 'public' && watched) {
+      try {
+        final saved = await document.get(const GetOptions(source: Source.server));
+        await ActivityService.postToFriends(
+          'watched',
+          saved.data() ?? {'id': tmdbId},
+          sourceId: tmdbId.toString(),
+        );
+      } catch (_) {}
+    }
   }
 }

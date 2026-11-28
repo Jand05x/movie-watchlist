@@ -106,7 +106,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
   Widget _row(Future<List<Map<String, dynamic>>> future) {
     return SizedBox(
-      height: 232,
+      height: MediaQuery.textScalerOf(context).scale(232),
       child: FutureBuilder<List<Map<String, dynamic>>>(
         future: future,
         builder: (context, snapshot) {

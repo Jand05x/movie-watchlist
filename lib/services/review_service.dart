@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/review.dart';
+import 'activity_service.dart';
 import 'taste_service.dart';
 import 'watchlist_service.dart';
 
@@ -184,13 +185,21 @@ class ReviewService {
       watched: watched,
       visibility: visibility,
     );
+    if (visibility == 'public' && watched) {
+      try {
+        await ActivityService.postToFriends(
+          'watched',
+          movie,
+          sourceId: id.toString(),
+        );
+      } catch (_) {}
+    }
   }
 
   static Future<void> setRating(
     Map<String, dynamic> movie, {
     required int rating,
     required String visibility,
-    String? note,
   }) async {
     if (rating < 1 || rating > 5) {
       throw ArgumentError('Rating must be between 1 and 5.');
@@ -212,7 +221,6 @@ class ReviewService {
           ? Timestamp.fromDate(current!.watchedAt!)
           : FieldValue.serverTimestamp(),
     };
-    if (note != null) data['note'] = note;
 
     await _commit(
       movie: movie,
@@ -221,6 +229,16 @@ class ReviewService {
       visibility: visibility,
       rating: rating,
     );
+    if (visibility == 'public') {
+      try {
+        await ActivityService.postToFriends(
+          'rated',
+          movie,
+          rating: rating.toDouble(),
+          sourceId: id.toString(),
+        );
+      } catch (_) {}
+    }
   }
 
   static Future<void> setVisibility(
@@ -256,11 +274,38 @@ class ReviewService {
     await batch.commit();
   }
 
-  static Future<void> setNote(int tmdbId, String note) async {
-    await _reviews.doc(tmdbId.toString()).set({
-      'note': note,
+  static Future<List<Review>> notes() async {
+    final reviews = await allReviews();
+    final withNotes = reviews.where((review) => review.note.trim().isNotEmpty).toList();
+    withNotes.sort((a, b) {
+      final left = a.timestamp ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final right = b.timestamp ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return right.compareTo(left);
+    });
+    return withNotes;
+  }
+
+  static Future<void> setNote(Map<String, dynamic> movie, String note) async {
+    final id = _id(movie);
+    final document = _reviews.doc(id.toString());
+    final snapshot = await document.get();
+    final payload = <String, dynamic>{
+      'note': note.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    };
+    if (!snapshot.exists) {
+      payload.addAll({
+        'tmdbId': id,
+        'title': movie['title'] ?? movie['name'] ?? 'Untitled',
+        'posterPath': movie['poster_path'] ?? movie['posterPath'] ?? '',
+        'mediaType': movie['media_type'] ?? movie['mediaType'] ?? 'movie',
+        'genres': const [],
+        'watched': false,
+        'visibility': 'private',
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    }
+    await document.set(payload, SetOptions(merge: true));
   }
 
   static Future<List<Review>> inMonth(DateTime start, DateTime end) async {

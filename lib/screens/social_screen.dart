@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../theme/brand.dart';
-import 'activity_feed_screen.dart';
 import 'add_friend_screen.dart';
 import 'friends_screen.dart';
 import 'inbox_screen.dart';
+import 'notes_from_friends_screen.dart';
 
 class SocialScreen extends StatefulWidget {
   const SocialScreen({super.key});
@@ -50,7 +50,7 @@ class _SocialScreenState extends State<SocialScreen>
           unselectedLabelColor: FlickerColors.muted,
           tabs: const [
             Tab(text: 'People'),
-            Tab(text: 'Circle'),
+            Tab(text: 'Notes'),
             Tab(text: 'Inbox'),
           ],
         ),
@@ -59,8 +59,8 @@ class _SocialScreenState extends State<SocialScreen>
         controller: _tabs,
         children: const [
           FriendsScreen(embedded: true),
-          ActivityFeedScreen(embedded: true),
-          InboxScreen(),
+          NotesFromFriendsScreen(embedded: true),
+          InboxScreen(embedded: true),
         ],
       ),
     );

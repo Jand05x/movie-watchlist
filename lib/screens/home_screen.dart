@@ -1,7 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import '../services/activity_service.dart';
 import '../services/taste_service.dart';
 import '../services/tmdb_service.dart';
 import '../services/user_service.dart';
@@ -9,8 +8,8 @@ import '../services/watchlist_service.dart';
 import '../theme/brand.dart';
 import '../widgets/initials_avatar.dart';
 import '../widgets/movie_card.dart';
+import '../widgets/movie_spin.dart';
 import '../widgets/section_header.dart';
-import 'activity_feed_screen.dart';
 import 'movie_details_screen.dart';
 import 'notifications_screen.dart';
 import 'profile_screen.dart';
@@ -173,20 +172,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             _greeting(uid),
             SectionHeader(
-              title: 'From your circle',
-              subtitle: 'Movies friends sent you',
-              actionLabel: 'See all',
-              onAction: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const ActivityFeedScreen(),
-                  ),
-                );
-              },
-            ),
-            _circleRow(),
-            SectionHeader(
               title: 'Your next watch',
               subtitle: 'Saved and not watched yet',
               actionLabel: 'Library',
@@ -199,6 +184,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
             ),
+            MovieSpin(onOpen: _open),
             _watchlistRow(),
             FutureBuilder<String?>(
               future: _topGenre,
@@ -267,71 +253,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _circleRow() {
-    return SizedBox(
-      height: 232,
-      child: StreamBuilder(
-        stream: ActivityService.feed(),
-        builder: (context, snapshot) {
-          final entries = snapshot.data ?? [];
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: FlickerColors.primaryBright),
-            );
-          }
-          if (snapshot.hasError) {
-            return const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20),
-              child: Text(
-                'Could not load your circle. Pull down to retry.',
-                style: FlickerText.caption,
-              ),
-            );
-          }
-          if (entries.isEmpty) {
-            return const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20),
-              child: Text(
-                'Share a movie with a friend to start your circle.',
-                style: FlickerText.caption,
-              ),
-            );
-          }
-
-          return ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            itemCount: entries.take(10).length,
-            separatorBuilder: (context, index) => const SizedBox(width: 12),
-            itemBuilder: (context, index) {
-              final entry = entries[index];
-              return MovieCard(
-                movie: {
-                  'id': entry.movieId,
-                  'title': entry.title,
-                  'poster_path': entry.posterPath,
-                  'media_type': entry.mediaType,
-                  'vote_average': entry.rating ?? 0,
-                },
-                width: 124,
-                badge: entry.isInvite ? 'INVITE' : 'FROM A FRIEND',
-                onTap: () => _open({
-                  'id': entry.movieId,
-                  'title': entry.title,
-                  'poster_path': entry.posterPath,
-                  'media_type': entry.mediaType,
-                }),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-
   Widget _watchlistRow() {
     return SizedBox(
-      height: 232,
+      height: MediaQuery.textScalerOf(context).scale(232),
       child: StreamBuilder<List<Map<String, dynamic>>>(
         stream: WatchlistService.watchlist(),
         builder: (context, snapshot) {
@@ -392,7 +316,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _futureRow(Future<List<Map<String, dynamic>>> future) {
     return SizedBox(
-      height: 232,
+      height: MediaQuery.textScalerOf(context).scale(232),
       child: FutureBuilder<List<Map<String, dynamic>>>(
         future: future,
         builder: (context, snapshot) {

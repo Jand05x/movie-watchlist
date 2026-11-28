@@ -12,6 +12,7 @@ Review review({
   bool watched = true,
   List<MovieGenre> genres = const [],
   String title = 'Movie',
+  String note = '',
 }) {
   return Review(
     tmdbId: tmdbId,
@@ -22,6 +23,7 @@ Review review({
     watched: watched,
     genres: genres,
     timestamp: date,
+    note: note,
   );
 }
 
@@ -88,8 +90,15 @@ void main() {
 
     expect(stats.highestRatedTitle, 'Best');
     expect(stats.highestRating, 5);
+    expect(stats.highestRatedMovie?.title, 'Best');
     expect(stats.longestStreak, 5);
-    expect(stats.badges.map((badge) => badge.unlocked), [true, false, true]);
+    expect(stats.ratedCount, 2);
+    expect(stats.averageRating, 4.5);
+    expect(stats.badges.take(3).map((badge) => badge.unlocked), [
+      true,
+      false,
+      true,
+    ]);
   });
 
   test('watchedAt overrides the mutable update timestamp for recaps', () {
@@ -138,5 +147,33 @@ void main() {
 
     final stats = computeRecap(reviews, now);
     expect(stats.badges[1].unlocked, isTrue);
+  });
+
+  test('recap counts notes and genre range', () {
+    final stats = computeRecap(
+      [
+        review(
+          tmdbId: 1,
+          date: DateTime(2026, 11, 1),
+          note: 'Loved it',
+          genres: const [MovieGenre(id: 28, name: 'Action')],
+        ),
+        review(
+          tmdbId: 2,
+          date: DateTime(2026, 11, 2),
+          genres: const [MovieGenre(id: 18, name: 'Drama')],
+        ),
+        review(
+          tmdbId: 3,
+          date: DateTime(2026, 11, 3),
+          genres: const [MovieGenre(id: 35, name: 'Comedy')],
+        ),
+      ],
+      now,
+    );
+
+    expect(stats.noteCount, 1);
+    expect(stats.distinctGenreCount, 3);
+    expect(stats.badges.last.unlocked, isTrue);
   });
 }

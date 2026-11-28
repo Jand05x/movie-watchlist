@@ -18,6 +18,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/friendships/$(pairId(first, second));
     }
 
+    function activityPath(activityId) {
+      return /databases/$(database)/documents/activities/$(activityId);
+    }
+
     function acceptedFriend(otherUid) {
       let pairPath = friendshipPath(uid(), otherUid);
       return exists(pairPath) && get(pairPath).data.status == 'accepted';
@@ -62,8 +66,29 @@ service cloud.firestore {
       return !('tasteShared' in profile) || profile.tasteShared == true;
     }
 
+    function discoverableBy(userId) {
+      let profile = get(/databases/$(database)/documents/users/$(userId)).data;
+      return !('discoverable' in profile) || profile.discoverable == true;
+    }
+
+    function profileVisible(userId) {
+      return userId == uid() || acceptedFriend(userId) || discoverableBy(userId);
+    }
+
+    function participant(data) {
+      return ('participants' in data) && uid() in data.participants;
+    }
+
+    function validReactionChange(oldData, newData) {
+      return newData.diff(oldData).affectedKeys().hasOnly(['reactions'])
+          && newData.reactions.diff(oldData.reactions).affectedKeys().hasOnly([uid()])
+          && (!(uid() in newData.reactions)
+              || newData.reactions[uid()] in ['❤️', '😂', '👀', '🍿']);
+    }
+
     match /users/{userId} {
-      allow read: if signedIn();
+      allow get: if signedIn() && profileVisible(userId);
+      allow list: if signedIn() && resource.data.discoverable == true;
       allow create: if signedIn()
                     && userId == uid()
                     && request.resource.data.uid == uid();
@@ -106,16 +131,14 @@ service cloud.firestore {
       match /feed/{shareId} {
         allow read: if signedIn() && userId == uid();
         allow create: if signedIn()
-          && (userId == uid()
-              || (request.resource.data.senderUid == uid()
-                  && request.resource.data.recipientUid == userId
-                  && existsAfter(/databases/$(database)/documents/shares/$(shareId))
-                  && getAfter(/databases/$(database)/documents/shares/$(shareId)).data.senderUid == uid()
-                  && getAfter(/databases/$(database)/documents/shares/$(shareId)).data.recipientUid == userId));
+          && ((userId == uid()
+              && request.resource.data.viewerUid == uid())
+              || (request.resource.data.actorUid == uid()
+                  && acceptedFriend(userId)
+                  && request.resource.data.activityId is string
+                  && existsAfter(activityPath(request.resource.data.activityId))));
         allow update: if signedIn()
           && userId == uid()
-          && resource.data.senderUid == request.resource.data.senderUid
-          && resource.data.recipientUid == request.resource.data.recipientUid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'status', 'reactions', 'read', 'respondedAt'
           ]);
@@ -152,7 +175,8 @@ service cloud.firestore {
                   && existsAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId))
                   && getAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId)).data.status in ['accepted', 'declined']
                   && getAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId)).data.recipientUid == uid()
-                  && getAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId)).data.senderUid == userId));
+                  && getAfter(/databases/$(database)/documents/shares/$(request.resource.data.shareId)).data.senderUid == userId)
+              );
         allow update: if signedIn()
           && (userId == uid()
               || resource.data.actorUid == uid()
@@ -165,9 +189,11 @@ service cloud.firestore {
     }
 
     match /usernames/{username} {
-      allow read: if signedIn();
+      allow get: if signedIn() && profileVisible(resource.data.uid);
+      allow list: if false;
       allow create: if signedIn()
-                    && request.resource.data.uid == uid();
+                    && request.resource.data.uid == uid()
+                    && get(/databases/$(database)/documents/users/$(uid())).data.discoverable == true;
       allow delete: if false;
       allow update: if false;
     }
@@ -237,6 +263,22 @@ service cloud.firestore {
         ]);
 
       allow delete: if signedIn() && uid() in resource.data.participants;
+    }
+
+    match /activities/{activityId} {
+      allow read: if signedIn() && participant(resource.data);
+      allow create: if signedIn()
+        && request.resource.data.actorUid == uid()
+        && request.resource.data.senderUid == uid()
+        && request.resource.data.participants is list
+        && uid() in request.resource.data.participants
+        && request.resource.data.reactions == {}
+        && request.resource.data.status == 'sent';
+      allow update: if signedIn()
+        && participant(resource.data)
+        && validReactionChange(resource.data, request.resource.data);
+      allow delete: if signedIn()
+        && resource.data.actorUid == uid();
     }
 
     match /taste/{userId} {

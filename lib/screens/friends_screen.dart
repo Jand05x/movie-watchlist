@@ -90,7 +90,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
           return AppEmptyState(
             icon: Icons.people_outline,
             title: 'No friends yet',
-            message: 'Find someone by email or username to start your circle.',
+            message: 'Find someone by email or username to start watching together.',
             actionLabel: widget.embedded ? null : 'Add friend',
             onAction: widget.embedded ? null : _openAddFriend,
           );

@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../models/recap.dart';
+import '../models/review.dart';
 import '../services/recap_service.dart';
+import '../theme/brand.dart';
+import '../widgets/app_error_state.dart';
+import '../widgets/app_loading.dart';
+import '../widgets/movie_card.dart';
 
 class RecapScreen extends StatelessWidget {
   const RecapScreen({super.key});
@@ -24,33 +29,17 @@ class RecapScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF141414),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF141414),
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: const Text(
-          'Your Recap',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-      ),
+      backgroundColor: FlickerColors.canvas,
+      appBar: AppBar(title: const Text('Your Recap')),
       body: FutureBuilder<RecapStats>(
         future: RecapService.currentMonth(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: Color(0xFFE50914)),
-            );
+            return const AppLoading(message: 'Building your recap...');
           }
           if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  'Could not build your recap.\n${snapshot.error}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-              ),
+            return AppErrorState(
+              message: 'Could not build your recap.\n${snapshot.error}',
             );
           }
 
@@ -59,36 +48,32 @@ class RecapScreen extends StatelessWidget {
             return const Center(
               child: Text(
                 'No recap data yet.',
-                style: TextStyle(color: Colors.white70),
+                style: FlickerText.body,
               ),
             );
           }
-          return _content(stats);
+          return _content(context, stats);
         },
       ),
     );
   }
 
-  Widget _content(RecapStats stats) {
+  Widget _content(BuildContext context, RecapStats stats) {
     final month = _months[stats.monthStart.month - 1];
+    final average = stats.averageRating == null
+        ? '—'
+        : stats.averageRating!.toStringAsFixed(1);
+    final unlocked = stats.badges.where((badge) => badge.unlocked).toList();
+    final locked = stats.badges.where((badge) => !badge.unlocked).toList();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       children: [
-        Text(
-          '$month ${stats.monthStart.year}',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 26,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Your month in movies',
-          style: TextStyle(color: Colors.white60, fontSize: 14),
-        ),
+        Text('$month ${stats.monthStart.year}', style: FlickerText.display),
+        const SizedBox(height: 4),
+        const Text('Your month in movies', style: FlickerText.caption),
         const SizedBox(height: 22),
+        _sectionTitle('The big picture'),
         Row(
           children: [
             Expanded(
@@ -104,6 +89,7 @@ class RecapScreen extends StatelessWidget {
                 icon: Icons.category_outlined,
                 value: stats.topGenre ?? '—',
                 label: 'Top genre',
+                smallValue: stats.topGenre != null,
               ),
             ),
           ],
@@ -113,10 +99,9 @@ class RecapScreen extends StatelessWidget {
           children: [
             Expanded(
               child: _statCard(
-                icon: Icons.star_outline,
-                value: stats.highestRating?.toStringAsFixed(0) ?? '—',
-                label: stats.highestRatedTitle ?? 'Highest rated',
-                smallValue: stats.highestRatedTitle != null,
+                icon: Icons.calendar_month_outlined,
+                value: '${stats.distinctDays}',
+                label: 'Movie nights',
               ),
             ),
             const SizedBox(width: 12),
@@ -124,31 +109,194 @@ class RecapScreen extends StatelessWidget {
               child: _statCard(
                 icon: Icons.local_fire_department_outlined,
                 value: '${stats.longestStreak}',
-                label: 'Best day streak',
+                label: 'Best streak',
               ),
             ),
           ],
         ),
-        const SizedBox(height: 30),
-        const Text(
-          'Badges',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
+        const SizedBox(height: 24),
+        _sectionTitle('By the numbers'),
+        Row(
+          children: [
+            Expanded(
+              child: _statCard(
+                icon: Icons.star_border_rounded,
+                value: average,
+                label: 'Average rating',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _statCard(
+                icon: Icons.star_rate_outlined,
+                value: '${stats.ratedCount}',
+                label: 'Movies rated',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _statCard(
+                icon: Icons.category_outlined,
+                value: '${stats.distinctGenreCount}',
+                label: 'Genres explored',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _statCard(
+                icon: Icons.note_outlined,
+                value: '${stats.noteCount}',
+                label: 'Notes written',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _statCard(
+          icon: Icons.event_available_outlined,
+          value: stats.mostActiveDayLabel ?? '—',
+          label: stats.mostActiveDayLabel == null
+              ? 'Busiest movie day'
+              : '${stats.mostActiveDayCount} movies on your busiest day',
+          smallValue: stats.mostActiveDayLabel != null,
+        ),
+        if (stats.highestRatedMovie != null) ...[
+          const SizedBox(height: 24),
+          _sectionTitle('Your standout'),
+          _highlightCard(stats.highestRatedMovie!),
+        ],
+        const SizedBox(height: 24),
+        _sectionTitle('Top genres'),
+        if (stats.topGenres.isEmpty)
+          const Text('No genres yet.', style: FlickerText.body)
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: stats.topGenres
+                .map(
+                  (genre) => _genreChip(genre.key, genre.value),
+                )
+                .toList(),
           ),
+        if (stats.watchedMovies.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          _sectionTitle('Recently watched'),
+          SizedBox(
+            height: MediaQuery.textScalerOf(context).scale(216),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: stats.watchedMovies.take(10).length,
+              separatorBuilder: (context, index) => const SizedBox(width: 10),
+              itemBuilder: (context, index) {
+                return _movieCard(stats.watchedMovies[index]);
+              },
+            ),
+          ),
+        ],
+        const SizedBox(height: 24),
+        _sectionTitle('Little wins'),
+        const Text(
+          'Milestones from this month.',
+          style: FlickerText.caption,
         ),
-        const SizedBox(height: 14),
-        GridView.count(
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.25,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          children: stats.badges.map(_badgeCard).toList(),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: unlocked.map(_badgeChip).toList(),
         ),
+        if (locked.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          const Text('Still to unlock', style: FlickerText.label),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: locked.map(_badgeChip).toList(),
+          ),
+        ],
       ],
+    );
+  }
+
+  Widget _sectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(title, style: FlickerText.section),
+    );
+  }
+
+  Widget _genreChip(String name, int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: FlickerColors.surface,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: FlickerColors.divider),
+      ),
+      child: Text(
+        '$name · $count',
+        style: FlickerText.body.copyWith(fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _highlightCard(Review movie) {
+    return Card(
+      color: FlickerColors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            _movieCard(movie, width: 92),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Highest rated', style: FlickerText.caption),
+                  const SizedBox(height: 4),
+                  Text(
+                    movie.title,
+                    style: FlickerText.body.copyWith(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${movie.rating}/5 stars',
+                    style: FlickerText.label.copyWith(
+                      color: FlickerColors.amber,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _movieCard(Review movie, {double width = 108}) {
+    return MovieCard(
+      movie: {
+        'id': movie.tmdbId,
+        'title': movie.title,
+        'poster_path': movie.posterPath,
+        'media_type': movie.mediaType,
+        'vote_average': movie.rating ?? 0,
+      },
+      width: width,
     );
   }
 
@@ -161,23 +309,21 @@ class RecapScreen extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF252525),
+        color: FlickerColors.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(color: FlickerColors.divider),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: const Color(0xFFE50914), size: 24),
+          Icon(icon, color: FlickerColors.primaryBright, size: 22),
           const SizedBox(height: 12),
           Text(
             value,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: smallValue ? 16 : 24,
-              fontWeight: FontWeight.bold,
+            style: FlickerText.display.copyWith(
+              fontSize: smallValue ? 17 : 24,
             ),
           ),
           const SizedBox(height: 4),
@@ -185,44 +331,55 @@ class RecapScreen extends StatelessWidget {
             label,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white60, fontSize: 12),
+            style: FlickerText.caption,
           ),
         ],
       ),
     );
   }
 
-  Widget _badgeCard(RecapBadge badge) {
-    final color = badge.unlocked ? Colors.amber : Colors.white24;
-
+  Widget _badgeChip(RecapBadge badge) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: badge.unlocked ? const Color(0xFF332A17) : const Color(0xFF202020),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withAlpha(140)),
+        color: badge.unlocked ? FlickerColors.roseWash : FlickerColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: badge.unlocked ? FlickerColors.primaryBright : FlickerColors.divider,
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            badge.unlocked ? Icons.emoji_events : Icons.lock_outline,
-            color: color,
-            size: 26,
+            badge.unlocked ? Icons.check_circle_outline : Icons.lock_outline,
+            size: 16,
+            color: badge.unlocked ? FlickerColors.amber : FlickerColors.muted,
           ),
-          const SizedBox(height: 10),
-          Text(
-            badge.title,
-            style: TextStyle(
-              color: badge.unlocked ? Colors.white : Colors.white60,
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
+          const SizedBox(width: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  badge.title,
+                  style: FlickerText.body.copyWith(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  badge.description,
+                  style: FlickerText.caption,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            badge.description,
-            style: const TextStyle(color: Colors.white54, fontSize: 11),
           ),
         ],
       ),

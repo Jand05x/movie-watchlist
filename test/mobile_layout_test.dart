@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:movie_watchlist/models/activity_entry.dart';
 import 'package:movie_watchlist/widgets/animated_star_rating.dart';
 import 'package:movie_watchlist/widgets/app_empty_state.dart';
 import 'package:movie_watchlist/widgets/genre_chip.dart';
+import 'package:movie_watchlist/widgets/friend_note_card.dart';
 import 'package:movie_watchlist/widgets/initials_avatar.dart';
+import 'package:movie_watchlist/widgets/movie_card.dart';
 import 'package:movie_watchlist/widgets/poster_image.dart';
 
 Widget _mobileHarness() {
@@ -53,6 +56,33 @@ Widget _mobileHarness() {
           ],
         ),
         const SizedBox(height: 20),
+        Builder(
+          builder: (context) => SizedBox(
+            height: MediaQuery.textScalerOf(context).scale(216),
+            child: const MovieCard(
+              movie: {
+                'id': 1,
+                'title': 'A movie title long enough to wrap onto two lines on a narrow phone',
+                'poster_path': '',
+                'media_type': 'movie',
+                'vote_average': 4.5,
+              },
+              width: 108,
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        FriendNoteCard(
+          entry: ActivityEntry.fromMap({
+            'senderUid': 'friend-1',
+            'movieId': 7,
+            'title': 'A shared movie with a long title that should wrap cleanly',
+            'note': 'This is a longer note from a friend that should stay readable on a small phone without causing overflow.',
+          }, 'note-1'),
+          senderName: 'Alex Morgan',
+          onOpen: () {},
+        ),
+        const SizedBox(height: 20),
         const AnimatedStarRating(rating: 4, size: 34),
       ],
     ),
@@ -87,6 +117,8 @@ void main() {
 
           expect(tester.takeException(), isNull);
           expect(find.text('No taste match yet'), findsOneWidget);
+          expect(find.byType(MovieCard), findsOneWidget);
+          expect(find.byType(FriendNoteCard), findsOneWidget);
           expect(find.byType(AnimatedStarRating), findsOneWidget);
         },
       );

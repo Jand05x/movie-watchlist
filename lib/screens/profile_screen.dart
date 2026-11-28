@@ -3,17 +3,23 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/friendship.dart';
+import '../models/review.dart';
 import '../models/user_profile.dart';
 import '../services/auth_service.dart';
 import '../services/compatibility_service.dart';
 import '../services/friend_service.dart';
+import '../services/review_service.dart';
 import '../services/taste_service.dart';
+import '../services/tmdb_service.dart';
 import '../services/user_service.dart';
+import '../services/watchlist_service.dart';
 import '../theme/brand.dart';
+import '../utils/date_format.dart';
 import '../widgets/app_empty_state.dart';
 import '../widgets/app_error_state.dart';
 import '../widgets/app_loading.dart';
 import '../widgets/initials_avatar.dart';
+import '../widgets/poster_image.dart';
 import 'notifications_screen.dart';
 import 'recap_screen.dart';
 
@@ -91,14 +97,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
               _header(context, profile),
               const SizedBox(height: 20),
               if (widget.friendUid == null) ...[
-                _tasteStats(uid),
-                const SizedBox(height: 8),
+                _profileCounts(),
+                const SizedBox(height: 18),
                 _sectionTitle(
-                  'Your taste match',
-                  'Score = shared genres (60%) + movies watched in common (40%). '
-                  'Both people need at least 3 ratings.',
+                  'Your movie taste',
+                  'The genres you keep coming back to.',
+                ),
+                _yourMovieTaste(uid),
+                const SizedBox(height: 18),
+                _sectionTitle(
+                  'Your taste with your friends',
+                  'See where your movie tastes overlap.',
                 ),
                 _compatibilityList(context),
+                const SizedBox(height: 18),
+                _sectionTitle(
+                  'Your movie notes',
+                  'Private thoughts you can keep on each movie.',
+                ),
+                _notesSection(),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: () {
@@ -131,10 +148,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ] else ...[
                 _sectionTitle(
                   'Taste match with ${profile.label}',
-                  'Based on genre overlap and watched movies in common.',
+                  'A quick snapshot of what you both enjoy.',
                 ),
                 _friendCompatibility(uid),
-                _tasteStats(uid),
+                const SizedBox(height: 18),
+                _sectionTitle(
+                  'Their movie taste',
+                  'Genres they enjoy most.',
+                ),
+                _yourMovieTaste(uid),
               ],
             ],
           );
@@ -294,17 +316,80 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Widget _tasteStats(String uid) {
+  Future<Map<String, int>> _loadCounts() async {
+    final entries = await WatchlistService.allEntries().first;
+    return {
+      'watched': entries.where((movie) => movie['watched'] == true).length,
+      'wanting': entries.where((movie) => movie['watched'] != true).length,
+    };
+  }
+
+  Widget _profileCounts() {
+    return FutureBuilder<Map<String, int>>(
+      key: ValueKey('counts-$_refreshKey'),
+      future: _loadCounts(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const AppLoading(message: 'Loading your library...');
+        }
+        if (snapshot.hasError) {
+          return AppErrorState(
+            message: 'Could not load your library.\n${snapshot.error}',
+            onRetry: _refresh,
+          );
+        }
+
+        final counts = snapshot.data ?? const <String, int>{};
+        return Row(
+          children: [
+            Expanded(
+              child: _statBox('${counts['watched'] ?? 0}', 'Watched'),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _statBox('${counts['wanting'] ?? 0}', 'Wanting to watch'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _statBox(String value, String label) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: FlickerColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: FlickerColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(value, style: FlickerText.display),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: FlickerText.caption,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _yourMovieTaste(String uid) {
     return FutureBuilder<Map<String, dynamic>?>(
       key: ValueKey('taste-$_refreshKey-$uid'),
       future: TasteService.forUser(uid),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const AppLoading(message: 'Loading taste profile...');
+          return const AppLoading(message: 'Loading movie taste...');
         }
         if (snapshot.hasError) {
           return AppErrorState(
-            message: 'Could not load taste profile.\n${snapshot.error}',
+            message: 'Movie taste is not available.',
             onRetry: _refresh,
           );
         }
@@ -313,58 +398,141 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (taste == null) {
           return const AppEmptyState(
             icon: Icons.movie_outlined,
-            title: 'No taste profile yet',
-            message: 'Rate at least 3 movies to build a taste profile.',
+            title: 'No movie taste yet',
+            message: 'Rate a few movies to build your taste profile.',
           );
         }
 
-        final watched = taste['watchedCount'] ?? 0;
-        final rated = taste['ratedCount'] ?? 0;
         final genres = taste['genreScores'];
+        if (genres is! List || genres.isEmpty) {
+          return const AppEmptyState(
+            icon: Icons.movie_outlined,
+            title: 'No movie taste yet',
+            message: 'Rate a few movies to build your taste profile.',
+          );
+        }
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(child: _stat('$watched', 'watched')),
-                const SizedBox(width: 12),
-                Expanded(child: _stat('$rated', 'rated')),
-              ],
-            ),
-            if (genres is List && genres.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: genres.whereType<Map>().map((genre) {
-                  return Chip(
-                    label: Text('${genre['name']}'),
-                    backgroundColor: FlickerColors.surface,
-                    labelStyle: FlickerText.caption,
-                  );
-                }).toList(),
-              ),
-            ],
-          ],
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: genres.whereType<Map>().map((genre) {
+            return Chip(
+              label: Text('${genre['name']}'),
+              backgroundColor: FlickerColors.surface,
+              labelStyle: FlickerText.caption,
+            );
+          }).toList(),
         );
       },
     );
   }
 
-  Widget _stat(String value, String label) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: FlickerColors.surface,
-        borderRadius: BorderRadius.circular(12),
+  Widget _notesSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: FlickerColors.primaryBright,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            ),
+            onPressed: () => _showNotePicker(context),
+            icon: const Icon(Icons.add_comment_outlined),
+            label: const Text('Add a note'),
+          ),
+        ),
+        const SizedBox(height: 12),
+        FutureBuilder<List<Review>>(
+          key: ValueKey('notes-$_refreshKey'),
+          future: ReviewService.notes(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const AppLoading(message: 'Loading notes...');
+            }
+            if (snapshot.hasError) {
+              return AppErrorState(
+                message: 'Could not load notes.\n${snapshot.error}',
+                onRetry: _refresh,
+              );
+            }
+
+            final notes = snapshot.data ?? const [];
+            if (notes.isEmpty) {
+              return const AppEmptyState(
+                icon: Icons.note_outlined,
+                title: 'No notes yet',
+                message: 'Pick a movie above and write a private note.',
+              );
+            }
+
+            return Column(
+              children: notes.map(_noteCard).toList(),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showNotePicker(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: FlickerColors.canvas,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: const Radius.circular(20)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(value, style: FlickerText.display),
-          Text(label, style: FlickerText.caption),
-        ],
+      builder: (_) => NotePickerSheet(onSaved: _refresh),
+    );
+  }
+
+  Widget _noteCard(Review review) {
+    return Card(
+      color: FlickerColors.surface,
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            PosterImage(
+              path: review.posterPath,
+              width: 44,
+              height: 64,
+              radius: 6,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    review.title,
+                    style: FlickerText.body.copyWith(fontWeight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    formatShortDate(review.timestamp),
+                    style: FlickerText.label,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    review.note,
+                    style: FlickerText.body,
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -558,6 +726,272 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+class NotePickerSheet extends StatefulWidget {
+  final VoidCallback onSaved;
+
+  const NotePickerSheet({super.key, required this.onSaved});
+
+  @override
+  State<NotePickerSheet> createState() => _NotePickerSheetState();
+}
+
+class _NotePickerSheetState extends State<NotePickerSheet> {
+  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _noteController = TextEditingController();
+  List<Map<String, dynamic>> _watchlist = const [];
+  List<Map<String, dynamic>> _results = const [];
+  Map<String, dynamic>? _selected;
+  bool _loadingWatchlist = true;
+  bool _searching = false;
+  bool _saving = false;
+  String? _searchError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWatchlist();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadWatchlist() async {
+    try {
+      final entries = await WatchlistService.watchlist().first;
+      if (!mounted) return;
+      setState(() {
+        _watchlist = entries
+            .where(
+              (movie) =>
+                  movie['tmdb_id'] != null ||
+                  movie['tmdbId'] != null ||
+                  movie['id'] != null,
+            )
+            .map(_normalize)
+            .toList();
+      });
+    } catch (_) {
+      if (mounted) setState(() => _searchError = 'Could not load your watchlist.');
+    } finally {
+      if (mounted) setState(() => _loadingWatchlist = false);
+    }
+  }
+
+  Map<String, dynamic> _normalize(Map<String, dynamic> movie) {
+    return {
+      'id': movie['id'] ?? movie['tmdbId'] ?? movie['tmdb_id'],
+      'title': movie['title'] ?? movie['name'] ?? 'Untitled',
+      'poster_path': movie['poster_path'] ?? movie['posterPath'] ?? '',
+      'media_type': movie['media_type'] ?? movie['mediaType'] ?? 'movie',
+    };
+  }
+
+  Future<void> _search() async {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) return;
+
+    setState(() {
+      _searching = true;
+      _searchError = null;
+    });
+
+    try {
+      final results = await TmdbService.searchMovies(query);
+      if (!mounted) return;
+      setState(() {
+        _results = results.take(8).map(_normalize).toList();
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _searchError = 'Could not search movies. Try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _searching = false);
+    }
+  }
+
+  Future<void> _save() async {
+    final selected = _selected;
+    if (selected == null || _saving) return;
+
+    setState(() => _saving = true);
+    try {
+      await ReviewService.setNote(selected, _noteController.text);
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onSaved();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save note: $e')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(20, 18, 20, 20 + bottomInset),
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.82,
+          child: _selected == null ? _pickMovie() : _writeNote(),
+        ),
+      ),
+    );
+  }
+
+  Widget _pickMovie() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('Add a private note', style: FlickerText.section),
+        const SizedBox(height: 4),
+        const Text('Pick a movie first.', style: FlickerText.caption),
+        const SizedBox(height: 14),
+        TextField(
+          controller: _searchController,
+          textInputAction: TextInputAction.search,
+          onSubmitted: (_) => _search(),
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Search movies',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.arrow_forward),
+              onPressed: _searching ? null : _search,
+            ),
+          ),
+        ),
+        if (_searchError != null) ...[
+          const SizedBox(height: 8),
+          Text(_searchError!, style: FlickerText.caption),
+        ],
+        const SizedBox(height: 12),
+        Expanded(
+          child: ListView(
+            children: [
+              const Text('Your watchlist', style: FlickerText.label),
+              const SizedBox(height: 6),
+              if (_loadingWatchlist)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_watchlist.isEmpty)
+                const Text(
+                  'Nothing saved yet. Search for a movie below.',
+                  style: FlickerText.caption,
+                )
+              else
+                ..._watchlist.map(_movieTile),
+              const SizedBox(height: 16),
+              if (_searching)
+                const Center(child: CircularProgressIndicator())
+              else if (_results.isNotEmpty) ...[
+                const Text('Search results', style: FlickerText.label),
+                const SizedBox(height: 6),
+                ..._results.map(_movieTile),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _writeNote() {
+    final movie = _selected!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            PosterImage(
+              path: movie['poster_path'] as String?,
+              width: 48,
+              height: 70,
+              radius: 6,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                movie['title'] as String? ?? 'Untitled',
+                style: FlickerText.body.copyWith(fontWeight: FontWeight.w700),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Change movie',
+              icon: const Icon(Icons.swap_horiz),
+              onPressed: () => setState(() {
+                _selected = null;
+                _noteController.clear();
+              }),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _noteController,
+          enabled: !_saving,
+          maxLines: 5,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            labelText: 'Your note',
+            hintText: 'What did you think?',
+            helperText: 'Private to you',
+          ),
+        ),
+        const Spacer(),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: FlickerColors.primaryBright,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+          onPressed: _saving ? null : _save,
+          icon: const Icon(Icons.save_outlined),
+          label: Text(_saving ? 'Saving...' : 'Save note'),
+        ),
+      ],
+    );
+  }
+
+  Widget _movieTile(Map<String, dynamic> movie) {
+    return Card(
+      color: FlickerColors.surface,
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: ListTile(
+        leading: PosterImage(
+          path: movie['poster_path'] as String?,
+          width: 40,
+          height: 58,
+          radius: 5,
+        ),
+        title: Text(
+          movie['title'] as String? ?? 'Untitled',
+          style: FlickerText.body.copyWith(fontWeight: FontWeight.w600),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: const Text('Tap to write a note', style: FlickerText.caption),
+        onTap: () => setState(() => _selected = movie),
+      ),
     );
   }
 }
